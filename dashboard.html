@@ -153,13 +153,13 @@ const COL_META = {
   'Внешняя сеть':                { type: 'dim' },
   'Клиент':                      { type: 'dim' },
   'Логин':                       { type: 'dim' },
-  'Расход, ₽':                   { type: 'metric', agg: 'sum', fmt: 'money' },
-  'CPC, ₽':                      { type: 'metric', agg: 'avg', fmt: 'money' },
-  'CTR, %':                      { type: 'metric', agg: 'calc', calc: 'ctr', fmt: 'pct' },
+  'Расход, ₽':                   { type: 'metric', agg: 'sum', fmt: 'money', role: 'spend' },
+  'CPC, ₽':                      { type: 'metric', agg: 'avg', fmt: 'money', role: 'cpc' },
+  'CTR, %':                      { type: 'metric', agg: 'calc', calc: 'ctr', fmt: 'pct', role: 'ctr' },
   'Ср. позиция показа':          { type: 'metric', agg: 'avg', fmt: 'num2' },
-  'Отказы, %':                   { type: 'metric', agg: 'avg', fmt: 'pct' },
-  'CR, %':                       { type: 'metric', agg: 'avg', fmt: 'pct' },
-  'CPA, ₽':                      { type: 'metric', agg: 'avg', fmt: 'money' },
+  'Отказы, %':                   { type: 'metric', agg: 'avg', fmt: 'pct', role: 'bounce' },
+  'CR, %':                       { type: 'metric', agg: 'avg', fmt: 'pct', role: 'cr' },
+  'CPA, ₽':                      { type: 'metric', agg: 'avg', fmt: 'money', role: 'cpa' },
   'Дата':                        { type: 'dim', role: 'date' },
   'Неделя':                      { type: 'dim', role: 'date' },
   'Месяц':                       { type: 'dim', role: 'date' },
@@ -169,9 +169,9 @@ const COL_META = {
   // Metrics (summable)
   'Показы':                      { type: 'metric', agg: 'sum', fmt: 'int', role: 'impressions' },
   'Клики':                       { type: 'metric', agg: 'sum', fmt: 'int', role: 'clicks' },
-  'Расход (руб.)':               { type: 'metric', agg: 'sum', fmt: 'money' },
-  'Расход, руб.':                { type: 'metric', agg: 'sum', fmt: 'money' },
-  'Конверсии':                   { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Расход (руб.)':               { type: 'metric', agg: 'sum', fmt: 'money', role: 'spend' },
+  'Расход, руб.':                { type: 'metric', agg: 'sum', fmt: 'money', role: 'spend' },
+  'Конверсии':                   { type: 'metric', agg: 'sum', fmt: 'int', role: 'conversions' },
   'Конверсии (покупки)':         { type: 'metric', agg: 'sum', fmt: 'int' },
   'Отказы':                      { type: 'metric', agg: 'sum', fmt: 'int' },
   'Взвешенные показы':           { type: 'metric', agg: 'sum', fmt: 'int' },
@@ -189,14 +189,14 @@ const COL_META = {
   'Прибыль от покупок':          { type: 'metric', agg: 'sum', fmt: 'money' },
 
   // Metrics (averaged)
-  'CTR (%)':                     { type: 'metric', agg: 'calc', calc: 'ctr', fmt: 'pct' },
+  'CTR (%)':                     { type: 'metric', agg: 'calc', calc: 'ctr', fmt: 'pct', role: 'ctr' },
   'Ср. цена клика (руб.)':      { type: 'metric', agg: 'avg', fmt: 'money' },
   'Средняя цена клика':          { type: 'metric', agg: 'avg', fmt: 'money' },
   'Ср. ставка за клик (руб.)':  { type: 'metric', agg: 'avg', fmt: 'money' },
   'Ср. позиция показов':        { type: 'metric', agg: 'avg', fmt: 'num2' },
   'Ср. позиция кликов':         { type: 'metric', agg: 'avg', fmt: 'num2' },
-  'Отказы (%)':                  { type: 'metric', agg: 'avg', fmt: 'pct' },
-  'Процент отказов':             { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'Отказы (%)':                  { type: 'metric', agg: 'avg', fmt: 'pct', role: 'bounce' },
+  'Процент отказов':             { type: 'metric', agg: 'avg', fmt: 'pct', role: 'bounce' },
   'Ср. цена тыс. показов (руб.)': { type: 'metric', agg: 'avg', fmt: 'money' },
   'CPM':                         { type: 'metric', agg: 'avg', fmt: 'money' },
   'Конверсия (%)':               { type: 'metric', agg: 'avg', fmt: 'pct' },
@@ -230,6 +230,11 @@ let mode = 'single';        // 'single' | 'compare'
 let datasetA = null;        // { rawData, dimensions, metrics, headerRow, period, fileName }
 let datasetB = null;
 let compareMetric = null;   // активная метрика для дельты (по умолчанию — расход)
+// Направление метрики: 'up' = рост хорошо, 'down' = падение хорошо
+const METRIC_DIRECTION = {
+  impressions: 'up', clicks: 'up', conversions: 'up', ctr: 'up', cr: 'up',
+  spend: 'down', cpc: 'down', cpa: 'down', bounce: 'down'
+};
 
 // ============================================================
 // HELPERS
@@ -254,6 +259,17 @@ function getMeta(colName) {
 function roleBy(roleName, dataset) {
   const ms = (dataset && dataset.metrics) || metrics;
   return ms.find(m => m.meta && m.meta.role === roleName);
+}
+
+// Определяет направление метрики по role или по имени
+function metricDirection(met) {
+  if (met.meta && met.meta.role && METRIC_DIRECTION[met.meta.role]) return METRIC_DIRECTION[met.meta.role];
+  const n = met.name.toLowerCase();
+  if (n.includes('показ') || n.includes('клик') || (n.includes('конверс') && !n.includes('цена'))) return 'up';
+  if (n.includes('ctr') || (n.includes('cr') && n.includes('%'))) return 'up';
+  if (n.includes('расход') || n.includes('cpc') || n.includes('cpa') || n.includes('цена')) return 'down';
+  if (n.includes('отказ')) return 'down';
+  return 'up';
 }
 
 function formatValue(val, fmtType) {
@@ -571,6 +587,37 @@ function applyFilters() {
 // ============================================================
 // AGGREGATION
 // ============================================================
+
+// Считает дельту для одной метрики между значением aVal и bVal
+function deltaRow(aVal, bVal, met) {
+  const a = (aVal === null || aVal === undefined || isNaN(aVal)) ? null : +aVal;
+  const b = (bVal === null || bVal === undefined || isNaN(bVal)) ? null : +bVal;
+  if (a === null && b === null) return { abs: null, pct: null, direction: null, isGood: null };
+  const aSafe = a === null ? 0 : a;
+  const bSafe = b === null ? 0 : b;
+  const abs = bSafe - aSafe;
+  const pct = aSafe !== 0 ? (abs / Math.abs(aSafe) * 100) : null;
+  const dir = metricDirection(met);
+  let isGood;
+  if (pct === null || pct === 0) isGood = null;
+  else isGood = dir === 'up' ? (pct > 0) : (pct < 0);
+  return { abs, pct, direction: dir, isGood };
+}
+
+// Сопоставляет строки двух агрегатов по label (primaryDim), регистронезависимо
+function matchByLabel(rowsA, rowsB) {
+  const norm = s => String(s).trim().toLowerCase();
+  const mapB = new Map(rowsB.map(r => [norm(r.label), r]));
+  const setA = new Set(rowsA.map(r => norm(r.label)));
+  const matched = [], onlyA = [], onlyB = [];
+  rowsA.forEach(a => {
+    const b = mapB.get(norm(a.label));
+    if (b) matched.push({ a, b }); else onlyA.push(a);
+  });
+  rowsB.forEach(b => { if (!setA.has(norm(b.label))) onlyB.push(b); });
+  return { matched, onlyA, onlyB };
+}
+
 function aggregateBy(dimCol, data, metricSet) {
   const ms = metricSet || metrics;
   const map = {};
