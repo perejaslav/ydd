@@ -167,8 +167,8 @@ const COL_META = {
   'Год':                         { type: 'dim', role: 'date' },
 
   // Metrics (summable)
-  'Показы':                      { type: 'metric', agg: 'sum', fmt: 'int' },
-  'Клики':                       { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Показы':                      { type: 'metric', agg: 'sum', fmt: 'int', role: 'impressions' },
+  'Клики':                       { type: 'metric', agg: 'sum', fmt: 'int', role: 'clicks' },
   'Расход (руб.)':               { type: 'metric', agg: 'sum', fmt: 'money' },
   'Расход, руб.':                { type: 'metric', agg: 'sum', fmt: 'money' },
   'Конверсии':                   { type: 'metric', agg: 'sum', fmt: 'int' },
@@ -245,6 +245,11 @@ function getMeta(colName) {
   if (n.includes('₽') || n.includes('руб') || n.includes('цена') || n.includes('стоимость') || n.includes('расход') || n.includes('cpm') || n.includes('cpc') || n.includes('cpa') || n.includes('прибыль') || n.includes('выручка'))
     return { type: 'metric', agg: 'avg', fmt: 'money' };
   return null;
+}
+
+function roleBy(roleName, dataset) {
+  const ms = (dataset && dataset.metrics) || metrics;
+  return ms.find(m => m.meta && m.meta.role === roleName);
 }
 
 function formatValue(val, fmtType) {
@@ -588,8 +593,10 @@ function aggregateBy(dimCol, data) {
       if (met.meta.agg === 'sum') {
         result[met.name] = m[met.name + '_sum'];
       } else if (met.meta.calc === 'ctr') {
-        const imp = m['Показы_sum'] || 0;
-        const clk = m['Клики_sum'] || 0;
+        const impMetric = metrics.find(mm => mm.meta && mm.meta.role === 'impressions');
+        const clkMetric = metrics.find(mm => mm.meta && mm.meta.role === 'clicks');
+        const imp = impMetric ? m[impMetric.name + '_sum'] : (m['Показы_sum'] || 0);
+        const clk = clkMetric ? m[clkMetric.name + '_sum'] : (m['Клики_sum'] || 0);
         result[met.name] = imp ? (clk / imp * 100) : 0;
       } else {
         const n = m[met.name + '_n'];
@@ -637,8 +644,12 @@ function renderKPIs() {
       const total = filteredData.reduce((s, r) => s + toNum(r[m.name]), 0);
       value = formatValue(total, m.meta.fmt);
     } else if (m.meta.calc === 'ctr') {
-      const imp = filteredData.reduce((s, r) => s + toNum(r['Показы']), 0);
-      const clk = filteredData.reduce((s, r) => s + toNum(r['Клики']), 0);
+      const impMetric = roleBy('impressions');
+      const clkMetric = roleBy('clicks');
+      const impName = impMetric ? impMetric.name : 'Показы';
+      const clkName = clkMetric ? clkMetric.name : 'Клики';
+      const imp = filteredData.reduce((s, r) => s + toNum(r[impName]), 0);
+      const clk = filteredData.reduce((s, r) => s + toNum(r[clkName]), 0);
       value = formatValue(imp ? clk / imp * 100 : 0, 'pct');
     } else {
       let sum = 0, n = 0;
