@@ -1,0 +1,875 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Яндекс.Директ — Дэшборд</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+:root {
+  --bg: #0f1117; --surface: #1a1d27; --surface2: #242836;
+  --border: #2e3348; --text: #e4e6f0; --text2: #8b8fa8;
+  --accent: #6366f1; --accent2: #818cf8; --green: #22c55e;
+  --red: #ef4444; --orange: #f59e0b; --cyan: #06b6d4;
+  --pink: #ec4899; --purple: #a855f7;
+}
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+header h1 { font-size: 20px; font-weight: 600; }
+header h1 span { color: var(--accent); }
+.period { color: var(--text2); font-size: 14px; }
+.upload-area { display: flex; align-items: center; gap: 12px; }
+.upload-btn { background: var(--accent); color: #fff; border: none; padding: 8px 16px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500; transition: .2s; }
+.upload-btn:hover { background: var(--accent2); }
+#fileInput { display: none; }
+
+.filters-bar { background: var(--surface); border-bottom: 1px solid var(--border); padding: 12px 24px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.filter-group { display: flex; flex-direction: column; gap: 4px; }
+.filter-group label { font-size: 11px; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+.filter-group select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; min-width: 160px; }
+.reset-btn { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; align-self: flex-end; transition: .2s; }
+.reset-btn:hover { color: var(--text); border-color: var(--accent); }
+
+main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
+
+.kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.kpi-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; position: relative; overflow: hidden; }
+.kpi-card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px; }
+.kpi-card.accent::before { background: var(--accent); }
+.kpi-card.green::before { background: var(--green); }
+.kpi-card.orange::before { background: var(--orange); }
+.kpi-card.red::before { background: var(--red); }
+.kpi-card.cyan::before { background: var(--cyan); }
+.kpi-card.pink::before { background: var(--pink); }
+.kpi-label { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+.kpi-value { font-size: 24px; font-weight: 700; }
+.kpi-sub { font-size: 11px; color: var(--text2); margin-top: 4px; }
+
+.section-title { font-size: 16px; font-weight: 600; margin: 24px 0 12px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+.chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.chart-card.full { grid-column: 1 / -1; }
+.chart-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+.chart-title .badge { font-size: 11px; background: var(--surface2); color: var(--text2); padding: 2px 8px; border-radius: 4px; font-weight: 400; }
+.chart-wrap { position: relative; height: 300px; }
+.chart-wrap.tall { height: 400px; }
+
+.table-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; overflow-x: auto; margin-bottom: 24px; }
+.table-card table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.table-card th { background: var(--surface2); color: var(--text2); font-weight: 600; text-align: left; padding: 10px 12px; cursor: pointer; user-select: none; white-space: nowrap; position: sticky; top: 0; }
+.table-card th:hover { color: var(--accent); }
+.table-card th .sort-arrow { font-size: 10px; margin-left: 4px; }
+.table-card td { padding: 8px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.table-card tr:hover td { background: var(--surface2); }
+.table-card .num { text-align: right; font-variant-numeric: tabular-nums; }
+.table-scroll { max-height: 500px; overflow-y: auto; }
+
+.status-good { color: var(--green); }
+.status-warn { color: var(--orange); }
+.status-bad { color: var(--red); }
+
+.empty-state { text-align: center; padding: 80px 20px; color: var(--text2); }
+.empty-state h2 { font-size: 20px; margin-bottom: 8px; color: var(--text); }
+
+@media (max-width: 900px) {
+  .charts-grid { grid-template-columns: 1fr; }
+  .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+}
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1><span>Яндекс.Директ</span> — Дэшборд</h1>
+    <div class="period" id="periodLabel">Загрузите файл статистики</div>
+  </div>
+  <div class="upload-area">
+    <button class="upload-btn" onclick="document.getElementById('fileInput').click()">Загрузить Excel</button>
+    <input type="file" id="fileInput" accept=".xlsx,.xls" />
+  </div>
+</header>
+
+<div class="filters-bar hidden" id="filtersBar"></div>
+
+<main>
+  <div id="emptyState" class="empty-state">
+    <h2>Загрузите файл статистики Яндекс.Директ</h2>
+    <p>Нажмите кнопку «Загрузить Excel» и выберите файл .xlsx</p>
+  </div>
+  <div id="dashboardContent" class="hidden"></div>
+</main>
+
+<script>
+// ============================================================
+// METADATA: known Yandex.Direct columns (Russian Excel headers)
+// Helps with formatting, but unknown columns still work fine
+// ============================================================
+const COL_META = {
+  // Dimensions
+  'Кампания':                    { type: 'dim', role: 'campaign' },
+  '№ Кампании':                  { type: 'dim', role: 'id' },
+  'Группа':                      { type: 'dim', role: 'group' },
+  '№ Группы':                    { type: 'dim', role: 'id' },
+  '№ Объявления':                { type: 'dim', role: 'id' },
+  'Тип площадки':                { type: 'dim' },
+  'Площадка':                    { type: 'dim' },
+  'Регион местонахождения':      { type: 'dim', role: 'region' },
+  'Регион таргетинга':           { type: 'dim', role: 'region' },
+  'Тип устройства':              { type: 'dim', role: 'device' },
+  'Устройство':                  { type: 'dim', role: 'device' },
+  'Пол':                         { type: 'dim', role: 'gender' },
+  'Возраст':                     { type: 'dim', role: 'age' },
+  'Доход':                       { type: 'dim' },
+  'Тип таргетинга':              { type: 'dim' },
+  'Тип.criteria':                { type: 'dim' },
+  'Критерий':                    { type: 'dim' },
+  'Поисковый запрос':            { type: 'dim' },
+  'Формат объявления':           { type: 'dim' },
+  'Сети':                        { type: 'dim' },
+  'Тип сети':                    { type: 'dim' },
+  'Мобильная платформа':         { type: 'dim' },
+  'Мобильное устройство':        { type: 'dim' },
+  'Оператор связи':              { type: 'dim' },
+  'Категория таргетинга':        { type: 'dim' },
+  'Размещение':                  { type: 'dim' },
+  'Позиция':                     { type: 'dim' },
+  'Тип клика':                   { type: 'dim' },
+  'Внешняя сеть':                { type: 'dim' },
+  'Клиент':                      { type: 'dim' },
+  'Логин':                       { type: 'dim' },
+  'Дата':                        { type: 'dim', role: 'date' },
+  'Неделя':                      { type: 'dim', role: 'date' },
+  'Месяц':                       { type: 'dim', role: 'date' },
+  'Квартал':                     { type: 'dim', role: 'date' },
+  'Год':                         { type: 'dim', role: 'date' },
+
+  // Metrics (summable)
+  'Показы':                      { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Клики':                       { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Расход (руб.)':               { type: 'metric', agg: 'sum', fmt: 'money' },
+  'Расход, руб.':                { type: 'metric', agg: 'sum', fmt: 'money' },
+  'Конверсии':                   { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Конверсии (покупки)':         { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Отказы':                      { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Взвешенные показы':           { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Взвешенные клики':            { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Сессии':                      { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Просмотры видео':             { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Достигшие 100% видео':       { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Достигшие 75% видео':        { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Достигшие 50% видео':        { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Достигшие 25% видео':        { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Охват':                       { type: 'metric', agg: 'sum', fmt: 'int' },
+  'Прибыль':                     { type: 'metric', agg: 'sum', fmt: 'money' },
+  'Выручка':                     { type: 'metric', agg: 'sum', fmt: 'money' },
+  'Доход от покупок':            { type: 'metric', agg: 'sum', fmt: 'money' },
+  'Прибыль от покупок':          { type: 'metric', agg: 'sum', fmt: 'money' },
+
+  // Metrics (averaged)
+  'CTR (%)':                     { type: 'metric', agg: 'calc', calc: 'ctr', fmt: 'pct' },
+  'Ср. цена клика (руб.)':      { type: 'metric', agg: 'avg', fmt: 'money' },
+  'Средняя цена клика':          { type: 'metric', agg: 'avg', fmt: 'money' },
+  'Ср. ставка за клик (руб.)':  { type: 'metric', agg: 'avg', fmt: 'money' },
+  'Ср. позиция показов':        { type: 'metric', agg: 'avg', fmt: 'num2' },
+  'Ср. позиция кликов':         { type: 'metric', agg: 'avg', fmt: 'num2' },
+  'Отказы (%)':                  { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'Процент отказов':             { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'Ср. цена тыс. показов (руб.)': { type: 'metric', agg: 'avg', fmt: 'money' },
+  'CPM':                         { type: 'metric', agg: 'avg', fmt: 'money' },
+  'Конверсия (%)':               { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'Конверсия':                   { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'Цена цели (руб.)':           { type: 'metric', agg: 'avg', fmt: 'money' },
+  'Цена конверсии':              { type: 'metric', agg: 'avg', fmt: 'money' },
+  'ROI (%)':                     { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'Ср. глубина просмотра':      { type: 'metric', agg: 'avg', fmt: 'num2' },
+  'Ср. частота показов':        { type: 'metric', agg: 'avg', fmt: 'num2' },
+  'Ср. трафик':                  { type: 'metric', agg: 'avg', fmt: 'num2' },
+  'Ср. цена просмотра видео':   { type: 'metric', agg: 'avg', fmt: 'money' },
+  'CTR видео (%)':               { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'CR видео (%)':                { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'Взвешенный CTR (%)':         { type: 'metric', agg: 'calc', calc: 'wctr', fmt: 'pct' },
+  'ROI покупок (%)':             { type: 'metric', agg: 'avg', fmt: 'pct' },
+};
+
+// ============================================================
+// STATE
+// ============================================================
+let rawData = [];
+let filteredData = [];
+let dimensions = [];   // { name, values, isFilter }
+let metrics = [];      // { name, meta, isPrimaryDim }
+let headerRow = [];
+let charts = {};
+let sortCol = null;
+let sortDir = -1;
+let filterSelects = {}; // colName -> HTMLSelectElement
+
+// ============================================================
+// HELPERS
+// ============================================================
+function hasValue(v) { return v !== undefined && v !== null && v !== '' && !isNaN(parseFloat(v)); }
+function toNum(v) { return (v === undefined || v === null || v === '') ? 0 : parseFloat(v) || 0; }
+function fmt(n, d = 0) { return n === null || n === undefined || isNaN(n) ? '—' : n.toLocaleString('ru-RU', { minimumFractionDigits: d, maximumFractionDigits: d }); }
+function fmtPct(n) { return fmt(n, 2); }
+
+function getMeta(colName) {
+  if (COL_META[colName]) return COL_META[colName];
+  // Auto-detect by name patterns
+  const n = colName.toLowerCase();
+  if (n.includes('%') || n.includes('ctr') || n.includes('конверсия') && n.includes('%') || n.includes('отказ') && n.includes('%') || n.includes('roi'))
+    return { type: 'metric', agg: 'avg', fmt: 'pct' };
+  if (n.includes('руб') || n.includes('цена') || n.includes('стоимость') || n.includes('расход') || n.includes('cpm') || n.includes('прибыль') || n.includes('выручка'))
+    return { type: 'metric', agg: 'avg', fmt: 'money' };
+  return null;
+}
+
+function formatValue(val, fmt) {
+  if (val === null || val === undefined || val === '' || isNaN(val)) return '—';
+  const n = parseFloat(val);
+  if (isNaN(n)) return val;
+  switch (fmt) {
+    case 'int': return fmt_int(n);
+    case 'money': return fmt(n, 2) + ' ₽';
+    case 'pct': return fmtPct(n) + '%';
+    case 'num2': return fmt(n, 2);
+    default: return fmt(n, 2);
+  }
+}
+function fmt_int(n) { return Math.round(n).toLocaleString('ru-RU'); }
+
+const PALETTE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#ec4899','#a855f7','#14b8a6','#f97316','#84cc16','#e879f9','#facc15','#38bdf8','#fb923c','#a3e635','#f472b6','#c084fc','#2dd4bf','#fbbf24','#34d399'];
+
+// ============================================================
+// FILE HANDLING
+// ============================================================
+document.getElementById('fileInput').addEventListener('change', handleFile);
+
+function handleFile(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(ev) {
+    const wb = XLSX.read(ev.target.result, { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
+    parseData(json);
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function parseData(rows) {
+  // Find header row
+  let headerIdx = -1;
+  for (let i = 0; i < Math.min(15, rows.length); i++) {
+    if (!rows[i]) continue;
+    // Look for a row that has at least 3 non-empty cells and contains known headers
+    const nonEmpty = rows[i].filter(c => c !== null && c !== undefined && c !== '');
+    if (nonEmpty.length >= 3) {
+      const rowStr = rows[i].join('|').toLowerCase();
+      if (rowStr.includes('кампания') || rowStr.includes('показы') || rowStr.includes('клики')) {
+        headerIdx = i;
+        break;
+      }
+    }
+  }
+  if (headerIdx === -1) { alert('Не удалось найти заголовки в файле. Убедитесь, что файл содержит отчёт Яндекс.Директ.'); return; }
+
+  headerRow = rows[headerIdx].map(h => (h || '').toString().trim());
+
+  // Parse data rows
+  rawData = [];
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const row = rows[i];
+    if (!row) continue;
+    // Skip empty rows or summary rows
+    const first = (row[0] || '').toString().trim();
+    if (!first || first.startsWith('с ') || first.startsWith('Итого') || first.startsWith('Всего')) continue;
+    const obj = {};
+    headerRow.forEach((h, idx) => {
+      if (h) obj[h] = row[idx] !== undefined ? row[idx] : null;
+    });
+    // Convert numeric values
+    headerRow.forEach(h => {
+      if (h && obj[h] !== undefined && obj[h] !== null) {
+        const v = parseFloat(obj[h]);
+        if (!isNaN(v)) obj[h] = v;
+      }
+    });
+    rawData.push(obj);
+  }
+
+  // Detect dimensions and metrics
+  detectColumns();
+
+  // Extract period
+  let period = '';
+  for (let i = 0; i < Math.min(headerIdx, 5); i++) {
+    if (rows[i] && rows[i][0]) {
+      const s = rows[i][0].toString();
+      if (s.includes('период') || s.match(/\d{2}\.\d{2}\.\d{4}/)) { period = s; break; }
+    }
+  }
+  document.getElementById('periodLabel').textContent = period || `${rawData.length} строк загружено`;
+
+  buildUI();
+  applyFilters();
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('dashboardContent').classList.remove('hidden');
+  document.getElementById('filtersBar').classList.remove('hidden');
+}
+
+// ============================================================
+// AUTO-DETECT COLUMNS
+// ============================================================
+function detectColumns() {
+  dimensions = [];
+  metrics = [];
+
+  headerRow.forEach(col => {
+    if (!col) return;
+    const meta = getMeta(col);
+
+    if (meta && meta.type === 'dim') {
+      dimensions.push({ name: col, values: getUniqueValues(col), meta });
+    } else if (meta && meta.type === 'metric') {
+      metrics.push({ name: col, meta });
+    } else {
+      // Auto-detect by data
+      const sampleVals = rawData.slice(0, 100).map(r => r[col]).filter(v => v !== undefined && v !== null && v !== '');
+      if (sampleVals.length === 0) return;
+
+      const numCount = sampleVals.filter(v => !isNaN(parseFloat(v))).length;
+      const ratio = numCount / sampleVals.length;
+
+      if (ratio < 0.3) {
+        // Mostly strings -> dimension
+        dimensions.push({ name: col, values: getUniqueValues(col), meta: {} });
+      } else {
+        // Mostly numbers -> metric
+        const uniqueNums = [...new Set(sampleVals.filter(v => !isNaN(parseFloat(v))).map(v => parseFloat(v)))];
+        // Check if it looks like percentages (all values 0-100)
+        const looksPct = uniqueNums.length > 1 && uniqueNums.every(v => v >= 0 && v <= 100) && uniqueNums.some(v => v > 0 && v < 1);
+        const fmt = looksPct ? 'pct' : 'int';
+        metrics.push({ name: col, meta: { agg: 'avg', fmt } });
+      }
+    }
+  });
+
+  // Determine primary dimension (campaign-like) for charts grouping
+  const primaryDim = dimensions.find(d => d.meta && d.meta.role === 'campaign')
+    || dimensions.find(d => d.values.length > 1 && d.values.length <= 50)
+    || dimensions[0];
+
+  if (primaryDim) {
+    metrics.forEach(m => m.isPrimaryDim = primaryDim.name);
+  }
+}
+
+function getUniqueValues(col) {
+  const vals = rawData.map(r => r[col]).filter(v => v !== undefined && v !== null && v !== '');
+  return [...new Set(vals)].sort((a, b) => {
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    return String(a).localeCompare(String(b));
+  });
+}
+
+// ============================================================
+// BUILD UI
+// ============================================================
+function buildUI() {
+  buildFilters();
+  buildContent();
+}
+
+function buildFilters() {
+  const bar = document.getElementById('filtersBar');
+  bar.innerHTML = '';
+  filterSelects = {};
+
+  // Create filter for each dimension (except IDs)
+  dimensions.forEach(dim => {
+    if (dim.meta && dim.meta.role === 'id') return;
+    if (dim.values.length <= 1) return; // No point filtering single-value dims
+    if (dim.values.length > 500) return; // Too many values (e.g. raw regions)
+
+    const group = document.createElement('div');
+    group.className = 'filter-group';
+
+    const label = document.createElement('label');
+    label.textContent = dim.name;
+
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="">Все</option>' +
+      dim.values.map(v => `<option value="${v}">${v}</option>`).join('');
+    sel.addEventListener('change', applyFilters);
+
+    group.appendChild(label);
+    group.appendChild(sel);
+    bar.appendChild(group);
+    filterSelects[dim.name] = sel;
+  });
+
+  // For very high-cardinality dims (regions), show top 30
+  dimensions.filter(d => d.values.length > 500 && (!d.meta || d.meta.role !== 'id')).forEach(dim => {
+    const group = document.createElement('div');
+    group.className = 'filter-group';
+    const label = document.createElement('label');
+    label.textContent = dim.name + ' (топ)';
+
+    // Find a spend-like metric for ranking
+    const spendCol = metrics.find(m => m.meta.fmt === 'money' && m.meta.agg === 'sum');
+    const regionSpend = {};
+    rawData.forEach(r => {
+      const reg = r[dim.name];
+      if (reg) regionSpend[reg] = (regionSpend[reg] || 0) + (spendCol ? toNum(r[spendCol.name]) : 1);
+    });
+    const topVals = Object.entries(regionSpend).sort((a, b) => b[1] - a[1]).slice(0, 30).map(e => e[0]);
+
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="">Все</option>' + topVals.map(v => `<option value="${v}">${v}</option>`).join('');
+    sel.addEventListener('change', applyFilters);
+    group.appendChild(label);
+    group.appendChild(sel);
+    bar.appendChild(group);
+    filterSelects[dim.name] = sel;
+  });
+
+  // Reset button
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'reset-btn';
+  resetBtn.textContent = 'Сбросить фильтры';
+  resetBtn.addEventListener('click', () => {
+    Object.values(filterSelects).forEach(s => s.value = '');
+    applyFilters();
+  });
+  bar.appendChild(resetBtn);
+}
+
+function buildContent() {
+  const content = document.getElementById('dashboardContent');
+  content.innerHTML = '';
+
+  // KPI grid
+  const kpiGrid = document.createElement('div');
+  kpiGrid.className = 'kpi-grid';
+  kpiGrid.id = 'kpiGrid';
+  content.appendChild(kpiGrid);
+
+  // Charts
+  const chartsGrid = document.createElement('div');
+  chartsGrid.className = 'charts-grid';
+  chartsGrid.id = 'chartsGrid';
+  content.appendChild(chartsGrid);
+
+  // Table
+  const tableSection = document.createElement('div');
+  tableSection.innerHTML = `
+    <div class="section-title">Детальная таблица</div>
+    <div class="table-card">
+      <div class="table-scroll">
+        <table id="dataTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>
+      </div>
+    </div>`;
+  content.appendChild(tableSection);
+}
+
+// ============================================================
+// FILTERING
+// ============================================================
+function applyFilters() {
+  filteredData = rawData.filter(r => {
+    for (const [col, sel] of Object.entries(filterSelects)) {
+      if (sel.value && String(r[col]) !== sel.value) return false;
+    }
+    return true;
+  });
+  renderAll();
+}
+
+// ============================================================
+// AGGREGATION
+// ============================================================
+function aggregateBy(dimCol, data) {
+  const map = {};
+  data.forEach(r => {
+    const k = r[dimCol];
+    if (k === undefined || k === null || k === '') return;
+    if (!map[k]) {
+      map[k] = { _count: 0 };
+      metrics.forEach(m => {
+        if (m.meta.agg === 'sum') map[k][m.name + '_sum'] = 0;
+        else { map[k][m.name + '_sum'] = 0; map[k][m.name + '_n'] = 0; }
+      });
+    }
+    const m = map[k];
+    m._count++;
+    metrics.forEach(met => {
+      const raw = r[met.name];
+      if (met.meta.agg === 'sum') {
+        m[met.name + '_sum'] += toNum(raw);
+      } else {
+        if (hasValue(raw)) {
+          m[met.name + '_sum'] += parseFloat(raw);
+          m[met.name + '_n']++;
+        }
+      }
+    });
+  });
+
+  return Object.entries(map).map(([k, m]) => {
+    const result = { label: k, _count: m._count };
+    metrics.forEach(met => {
+      if (met.meta.agg === 'sum') {
+        result[met.name] = m[met.name + '_sum'];
+      } else if (met.meta.calc === 'ctr') {
+        const imp = m['Показы_sum'] || 0;
+        const clk = m['Клики_sum'] || 0;
+        result[met.name] = imp ? (clk / imp * 100) : 0;
+      } else {
+        const n = m[met.name + '_n'];
+        result[met.name] = n ? m[met.name + '_sum'] / n : null;
+      }
+    });
+    return result;
+  });
+}
+
+// ============================================================
+// RENDER
+// ============================================================
+function renderAll() {
+  renderKPIs();
+  renderCharts();
+  renderTable();
+}
+
+function renderKPIs() {
+  const grid = document.getElementById('kpiGrid');
+  grid.innerHTML = '';
+
+  // Pick key metrics for KPI cards (sum-type first, then ctr, then avg)
+  const kpiMetrics = metrics.filter(m => {
+    if (m.meta.agg === 'sum' && m.meta.fmt !== 'int') return true;
+    if (m.meta.calc === 'ctr') return true;
+    if (m.name.toLowerCase().includes('конверсия') && m.meta.fmt === 'pct') return true;
+    if (m.name.toLowerCase().includes('отказ') && m.meta.fmt === 'pct') return true;
+    if (m.name.toLowerCase().includes('позиция')) return true;
+    return false;
+  });
+
+  // Always include impressions, clicks, cost, ctr if available
+  const priority = ['Показы', 'Клики', 'CTR (%)', 'Расход (руб.)', 'Расход, руб.', 'Конверсии', 'Конверсия (%)', 'Конверсия', 'Отказы (%)', 'Процент отказов', 'Ср. позиция показов', 'ROI (%)'];
+  const ordered = [];
+  priority.forEach(p => { const m = metrics.find(x => x.name === p); if (m && !ordered.includes(m)) ordered.push(m); });
+  kpiMetrics.forEach(m => { if (!ordered.includes(m)) ordered.push(m); });
+
+  const clsColors = ['accent', 'cyan', 'green', 'pink', 'orange', 'red', 'green', 'orange', 'red', 'green', 'accent', 'green'];
+
+  ordered.slice(0, 12).forEach((m, i) => {
+    let value;
+    if (m.meta.agg === 'sum') {
+      const total = filteredData.reduce((s, r) => s + toNum(r[m.name]), 0);
+      value = formatValue(total, m.meta.fmt);
+    } else if (m.meta.calc === 'ctr') {
+      const imp = filteredData.reduce((s, r) => s + toNum(r['Показы']), 0);
+      const clk = filteredData.reduce((s, r) => s + toNum(r['Клики']), 0);
+      value = formatValue(imp ? clk / imp * 100 : 0, 'pct');
+    } else {
+      let sum = 0, n = 0;
+      filteredData.forEach(r => { if (hasValue(r[m.name])) { sum += parseFloat(r[m.name]); n++; } });
+      value = formatValue(n ? sum / n : null, m.meta.fmt);
+    }
+
+    const card = document.createElement('div');
+    card.className = `kpi-card ${clsColors[i % clsColors.length]}`;
+    card.innerHTML = `<div class="kpi-label">${m.name.replace(/\s*\(.*?\)\s*/, '')}</div><div class="kpi-value">${value}</div>`;
+    grid.appendChild(card);
+  });
+
+  // Total rows KPI
+  const card = document.createElement('div');
+  card.className = 'kpi-card accent';
+  card.innerHTML = `<div class="kpi-label">Строк данных</div><div class="kpi-value">${fmt(filteredData.length)}</div>`;
+  grid.appendChild(card);
+}
+
+function renderCharts() {
+  Object.values(charts).forEach(c => c.destroy());
+  charts = {};
+
+  const grid = document.getElementById('chartsGrid');
+  grid.innerHTML = '';
+
+  const primaryDim = metrics[0] ? metrics[0].isPrimaryDim : null;
+  if (!primaryDim) return;
+
+  const byPrimary = aggregateBy(primaryDim, filteredData);
+  if (byPrimary.length === 0) return;
+
+  // Sort by first sum-metric or first metric
+  const sortMetric = metrics.find(m => m.meta.agg === 'sum') || metrics[0];
+  byPrimary.sort((a, b) => (b[sortMetric.name] || 0) - (a[sortMetric.name] || 0));
+  const labels = byPrimary.map(r => r.label);
+
+  // 1. Main comparison: spend + clicks (or first two sum metrics)
+  const sumMetrics = metrics.filter(m => m.meta.agg === 'sum' && m.meta.fmt !== 'int').slice(0, 2);
+  if (sumMetrics.length >= 1) {
+    const card = makeChartCard(`${sumMetrics.map(m => m.name.replace(/\s*\(.*?\)/, '')).join(' и ')} по ${primaryDim}`, 'сравнение', true);
+    grid.appendChild(card);
+    const canvas = card.querySelector('canvas');
+    const datasets = [];
+    sumMetrics.forEach((m, i) => {
+      datasets.push({
+        label: m.name,
+        data: byPrimary.map(r => +(r[m.name] || 0).toFixed(2)),
+        backgroundColor: PALETTE[i] + (i === 0 ? '' : '99'),
+        yAxisID: i === 0 ? 'y' : 'y1',
+        order: 2 - i
+      });
+    });
+    // Add line for clicks if not already included
+    const clickMetric = metrics.find(m => m.name === 'Клики');
+    if (clickMetric && !sumMetrics.includes(clickMetric)) {
+      datasets.push({
+        label: 'Клики',
+        data: byPrimary.map(r => r['Клики'] || 0),
+        type: 'line', borderColor: '#22c55e', backgroundColor: '#22c55e33',
+        pointRadius: 4, yAxisID: 'y1', order: 1, tension: 0.3
+      });
+    }
+    const y1Label = datasets.length > 1 ? (sumMetrics[1] ? sumMetrics[1].name.replace(/\s*\(.*?\)/, '') : 'Клики') : undefined;
+    charts.main = new Chart(canvas, {
+      type: 'bar',
+      data: { labels, datasets },
+      options: chartOpts(sumMetrics[0].name.replace(/\s*\(.*?\)/, ''), y1Label, true)
+    });
+  }
+
+  // 2. CTR bar chart
+  const ctrMetric = metrics.find(m => m.meta.calc === 'ctr' || m.name === 'CTR (%)');
+  if (ctrMetric) {
+    const card = makeChartCard('CTR по ' + primaryDim, '%');
+    grid.appendChild(card);
+    const data = byPrimary.map(r => +(r[ctrMetric.name] || 0).toFixed(2));
+    charts.ctr = new Chart(card.querySelector('canvas'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: 'CTR %', data, backgroundColor: data.map(v => v >= 5 ? '#22c55e' : v >= 2 ? '#f59e0b' : '#ef4444') }] },
+      options: barOpts('CTR %')
+    });
+  }
+
+  // 3. CPC bar chart
+  const cpcMetric = metrics.find(m => m.name.includes('цена клика'));
+  if (cpcMetric) {
+    const sorted = [...byPrimary].sort((a, b) => (b[cpcMetric.name] || 0) - (a[cpcMetric.name] || 0));
+    const card = makeChartCard('Средняя цена клика', 'руб.');
+    grid.appendChild(card);
+    charts.cpc = new Chart(card.querySelector('canvas'), {
+      type: 'bar',
+      data: { labels: sorted.map(r => r.label), datasets: [{ label: cpcMetric.name, data: sorted.map(r => +(r[cpcMetric.name] || 0).toFixed(2)), backgroundColor: '#f59e0b' }] },
+      options: barOpts(cpcMetric.name)
+    });
+  }
+
+  // 4. Doughnut charts for low-cardinality dimensions
+  dimensions.filter(d => d.values.length >= 2 && d.values.length <= 10 && d.name !== primaryDim && (!d.meta || d.meta.role !== 'id')).forEach(dim => {
+    const byDim = aggregateBy(dim.name, filteredData);
+    const spendMetric = metrics.find(m => m.meta.agg === 'sum' && m.meta.fmt === 'money');
+    if (!spendMetric || byDim.length < 2) return;
+
+    const card = makeChartCard(spendMetric.name.replace(/\s*\(.*?\)/, '') + ' по ' + dim.name);
+    grid.appendChild(card);
+    const id = 'chart_' + dim.name.replace(/\s+/g, '_');
+    card.querySelector('canvas').id = id;
+    charts[id] = new Chart(document.getElementById(id), {
+      type: 'doughnut',
+      data: { labels: byDim.map(d => d.label), datasets: [{ data: byDim.map(d => +(d[spendMetric.name] || 0).toFixed(2)), backgroundColor: PALETTE }] },
+      options: doughnutOpts()
+    });
+  });
+
+  // 5. Bounce rate chart
+  const bounceMetric = metrics.find(m => m.name.includes('Отказ') && m.meta.fmt === 'pct');
+  if (bounceMetric) {
+    const sorted = [...byPrimary].sort((a, b) => (b[bounceMetric.name] || 0) - (a[bounceMetric.name] || 0));
+    const card = makeChartCard(bounceMetric.name + ' по ' + primaryDim, '%');
+    grid.appendChild(card);
+    const data = sorted.map(r => +(r[bounceMetric.name] || 0).toFixed(2));
+    charts.bounce = new Chart(card.querySelector('canvas'), {
+      type: 'bar',
+      data: { labels: sorted.map(r => r.label), datasets: [{ label: bounceMetric.name, data, backgroundColor: data.map(v => v <= 25 ? '#22c55e' : v <= 40 ? '#f59e0b' : '#ef4444') }] },
+      options: barOpts(bounceMetric.name)
+    });
+  }
+
+  // 6. Conversions chart
+  const convMetric = metrics.find(m => m.name === 'Конверсии');
+  const convCostMetric = metrics.find(m => m.name.includes('Цена цели') || m.name.includes('Цена конверсии'));
+  if (convMetric) {
+    const sorted = [...byPrimary].sort((a, b) => (b[convMetric.name] || 0) - (a[convMetric.name] || 0));
+    const card = makeChartCard('Конверсии по ' + primaryDim);
+    grid.appendChild(card);
+    const datasets = [{ label: 'Конверсии', data: sorted.map(r => r[convMetric.name] || 0), backgroundColor: '#22c55e', yAxisID: 'y' }];
+    if (convCostMetric) {
+      datasets.push({
+        label: convCostMetric.name, data: sorted.map(r => +(r[convCostMetric.name] || 0).toFixed(2)),
+        type: 'line', borderColor: '#ef4444', pointRadius: 4, yAxisID: 'y1', tension: 0.3
+      });
+    }
+    charts.conv = new Chart(card.querySelector('canvas'), {
+      type: 'bar',
+      data: { labels: sorted.map(r => r.label), datasets },
+      options: chartOpts('Конверсии', convCostMetric ? convCostMetric.name : undefined)
+    });
+  }
+
+  // 7. Top regions (if region dimension exists and has many values)
+  const regionDim = dimensions.find(d => d.meta && d.meta.role === 'region');
+  if (regionDim) {
+    const byRegion = aggregateBy(regionDim.name, filteredData);
+    if (byRegion.length > 3) {
+      const spendMetric = metrics.find(m => m.meta.agg === 'sum' && m.meta.fmt === 'money');
+      if (spendMetric) {
+        byRegion.sort((a, b) => (b[spendMetric.name] || 0) - (a[spendMetric.name] || 0));
+        const top15 = byRegion.slice(0, 15);
+        const card = makeChartCard('Топ-15 регионов по расходу');
+        grid.appendChild(card);
+        charts.regions = new Chart(card.querySelector('canvas'), {
+          type: 'bar',
+          data: { labels: top15.map(r => r.label.length > 25 ? r.label.slice(0, 25) + '…' : r.label), datasets: [{ label: spendMetric.name, data: top15.map(r => +(r[spendMetric.name] || 0).toFixed(2)), backgroundColor: '#06b6d4' }] },
+          options: { ...barOpts(spendMetric.name), indexAxis: 'y' }
+        });
+      }
+    }
+  }
+
+  // 8. Bubble: CTR vs CPC
+  if (ctrMetric && cpcMetric) {
+    const spendMetric = metrics.find(m => m.meta.agg === 'sum' && m.meta.fmt === 'money');
+    const card = makeChartCard('CTR vs Цена клика', 'пузырьковая', true);
+    grid.appendChild(card);
+    charts.bubble = new Chart(card.querySelector('canvas'), {
+      type: 'bubble',
+      data: {
+        datasets: byPrimary.map((c, i) => ({
+          label: c.label,
+          data: [{ x: +(c[ctrMetric.name] || 0).toFixed(2), y: +(c[cpcMetric.name] || 0).toFixed(2), r: Math.max(5, Math.sqrt(c[spendMetric ? spendMetric.name] || 1) * 0.8) }],
+          backgroundColor: PALETTE[i % PALETTE.length] + '99',
+          borderColor: PALETTE[i % PALETTE.length]
+        }))
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: { legend: { labels: { color: '#e4e6f0', font: { size: 11 } } } },
+        scales: {
+          x: { title: { display: true, text: 'CTR %', color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { color: '#2e3348' } },
+          y: { title: { display: true, text: cpcMetric.name, color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { color: '#2e3348' } }
+        }
+      }
+    });
+  }
+}
+
+function makeChartCard(title, badge, full) {
+  const div = document.createElement('div');
+  div.className = 'chart-card' + (full ? ' full' : '');
+  div.innerHTML = `
+    <div class="chart-title">${title}${badge ? ` <span class="badge">${badge}</span>` : ''}</div>
+    <div class="chart-wrap${full ? ' tall' : ''}"><canvas></canvas></div>`;
+  return div;
+}
+
+function chartOpts(yLabel, y1Label, stacked) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: '#e4e6f0', font: { size: 11 } } } },
+    scales: {
+      x: { ticks: { color: '#8b8fa8', maxRotation: 45 }, grid: { color: '#2e3348' } },
+      y: { title: { display: true, text: yLabel, color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { color: '#2e3348' }, stacked },
+      ...(y1Label ? { y1: { position: 'right', title: { display: true, text: y1Label, color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { display: false }, stacked } } : {})
+    }
+  };
+}
+function barOpts(yLabel) {
+  return {
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: false } },
+    scales: {
+      x: { ticks: { color: '#8b8fa8', maxRotation: 45 }, grid: { color: '#2e3348' } },
+      y: { title: { display: true, text: yLabel, color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { color: '#2e3348' } }
+    }
+  };
+}
+function doughnutOpts() {
+  return {
+    responsive: true, maintainAspectRatio: false, cutout: '55%',
+    plugins: { legend: { position: 'right', labels: { color: '#e4e6f0', font: { size: 12 }, padding: 12 } } }
+  };
+}
+
+// ============================================================
+// TABLE
+// ============================================================
+function renderTable() {
+  const primaryDim = metrics[0] ? metrics[0].isPrimaryDim : null;
+  if (!primaryDim) return;
+
+  const byPrimary = aggregateBy(primaryDim, filteredData);
+
+  // Sort
+  if (sortCol === null) {
+    const spendMetric = metrics.find(m => m.meta.agg === 'sum' && m.meta.fmt === 'money');
+    sortCol = spendMetric ? spendMetric.name : metrics[0].name;
+    sortDir = -1;
+  }
+  byPrimary.sort((a, b) => {
+    const av = typeof a[sortCol] === 'number' ? a[sortCol] : (a.label || '');
+    const bv = typeof b[sortCol] === 'number' ? b[sortCol] : (b.label || '');
+    if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * sortDir;
+    return String(av).localeCompare(String(bv)) * sortDir;
+  });
+
+  // Build header
+  const head = document.getElementById('tableHead');
+  const cols = [primaryDim, ...metrics.map(m => m.name)];
+  head.innerHTML = cols.map(col => {
+    const isLabel = col === primaryDim;
+    const align = isLabel ? 'left' : 'right';
+    const arrow = sortCol === col ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
+    return `<th onclick="sortTable('${col.replace(/'/g, "\\'")}')" style="text-align:${align}">${col.replace(/\s*\(.*?\)/, '')}<span class="sort-arrow">${arrow}</span></th>`;
+  }).join('');
+
+  // Build body
+  const body = document.getElementById('tableBody');
+  body.innerHTML = byPrimary.map(r => {
+    const cells = cols.map(col => {
+      if (col === primaryDim) return `<td>${r.label}</td>`;
+      const meta = metrics.find(m => m.name === col);
+      const fmt = meta ? meta.meta.fmt : 'num2';
+      const val = r[col];
+      let cls = 'num';
+      // Color coding for key metrics
+      if (fmt === 'pct') {
+        if (val !== null && val !== undefined) {
+          if (col.toLowerCase().includes('ctr')) cls += val >= 5 ? ' status-good' : val >= 2 ? ' status-warn' : ' status-bad';
+          else if (col.toLowerCase().includes('отказ')) cls += val <= 25 ? ' status-good' : val <= 40 ? ' status-warn' : ' status-bad';
+        }
+      }
+      return `<td class="${cls}">${formatValue(val, fmt)}</td>`;
+    }).join('');
+    return `<tr>${cells}</tr>`;
+  }).join('');
+}
+
+function sortTable(col) {
+  if (sortCol === col) sortDir *= -1;
+  else { sortCol = col; sortDir = -1; }
+  renderTable();
+}
+</script>
+</body>
+</html>
