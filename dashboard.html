@@ -1112,6 +1112,7 @@ function renderTable() {
 }
 
 function sortTable(col) {
+  if (mode === 'compare') return; // сортировка в compare-режиме не поддерживается в этой итерации
   if (sortCol === col) sortDir *= -1;
   else { sortCol = col; sortDir = -1; }
   renderTable();
@@ -1326,8 +1327,64 @@ function renderDeltaCharts(primaryA, primaryB, compareMetrics) {
 function renderDeltaTable(primaryA, primaryB, compareMetrics) {
   const head = document.getElementById('tableHead');
   const body = document.getElementById('tableBody');
-  if (head) head.innerHTML = '';
-  if (body) body.innerHTML = '';
+
+  const aggA = aggregateBy(primaryA, datasetA.rawData, datasetA.metrics);
+  const aggB = aggregateBy(primaryB, datasetB.rawData, datasetB.metrics);
+  const { matched, onlyA, onlyB } = matchByLabel(aggA, aggB);
+
+  const cols = compareMetrics.slice(0, 3);
+
+  const thCells = [`<th style="text-align:left">${primaryA}</th>`];
+  cols.forEach(pair => {
+    const name = pair.a.name.replace(/\s*[\(\[,].*$/, '').replace(/\s+₽?$/, '');
+    thCells.push(`<th class="num" style="text-align:right">A: ${name}</th>`);
+    thCells.push(`<th class="num" style="text-align:right">B: ${name}</th>`);
+    thCells.push(`<th class="num" style="text-align:right">Δ%</th>`);
+  });
+  head.innerHTML = thCells.join('');
+
+  const rows = [];
+  matched.forEach(({ a, b }) => {
+    const cells = [`<td>${a.label}</td>`];
+    cols.forEach(pair => {
+      const d = deltaRow(a[pair.a.name], b[pair.b.name], pair.a);
+      const colorClass = d.isGood === null ? '' : (d.isGood ? 'status-good' : 'status-bad');
+      const pctStr = d.pct === null ? '—' : (d.pct > 0 ? '+' : '') + d.pct.toFixed(1) + '%';
+      cells.push(`<td class="num">${formatValue(a[pair.a.name], pair.a.meta.fmt)}</td>`);
+      cells.push(`<td class="num">${formatValue(b[pair.b.name], pair.b.meta.fmt)}</td>`);
+      cells.push(`<td class="num ${colorClass}">${pctStr}</td>`);
+    });
+    rows.push(`<tr>${cells.join('')}</tr>`);
+  });
+
+  if (onlyA.length) {
+    const span = 1 + cols.length * 3;
+    rows.push(`<tr><td colspan="${span}" style="background:var(--surface2);color:var(--text2);font-style:italic">Только в A (${onlyA.length})</td></tr>`);
+    onlyA.forEach(a => {
+      const cells = [`<td>${a.label}</td>`];
+      cols.forEach(pair => {
+        cells.push(`<td class="num">${formatValue(a[pair.a.name], pair.a.meta.fmt)}</td>`);
+        cells.push(`<td class="num">—</td>`);
+        cells.push(`<td class="num">—</td>`);
+      });
+      rows.push(`<tr>${cells.join('')}</tr>`);
+    });
+  }
+  if (onlyB.length) {
+    const span = 1 + cols.length * 3;
+    rows.push(`<tr><td colspan="${span}" style="background:var(--surface2);color:var(--text2);font-style:italic">Только в B (${onlyB.length})</td></tr>`);
+    onlyB.forEach(b => {
+      const cells = [`<td>${b.label}</td>`];
+      cols.forEach(pair => {
+        cells.push(`<td class="num">—</td>`);
+        cells.push(`<td class="num">${formatValue(b[pair.b.name], pair.b.meta.fmt)}</td>`);
+        cells.push(`<td class="num">—</td>`);
+      });
+      rows.push(`<tr>${cells.join('')}</tr>`);
+    });
+  }
+
+  body.innerHTML = rows.join('');
 }
 </script>
 </body>
