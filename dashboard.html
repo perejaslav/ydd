@@ -86,6 +86,20 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
   .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
 }
 .hidden { display: none !important; }
+.compare-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text2); cursor: pointer; user-select: none; }
+.switch { position: relative; width: 36px; height: 20px; background: var(--surface2); border: 1px solid var(--border); border-radius: 10px; transition: .2s; flex-shrink: 0; }
+.switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; background: var(--text2); border-radius: 50%; transition: .2s; }
+.compare-toggle input { display: none; }
+.compare-toggle input:checked + .switch { background: var(--accent); border-color: var(--accent); }
+.compare-toggle input:checked + .switch::after { left: 18px; background: #fff; }
+.file-slot { display: flex; align-items: center; gap: 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; font-size: 12px; }
+.file-slot.loaded { border-color: var(--green); }
+.file-slot.error { border-color: var(--red); }
+.file-slot .slot-name { color: var(--text2); }
+.file-slot .slot-file { color: var(--text); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-slot button { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; }
+.file-slot button:hover { text-decoration: underline; }
+.compare-hint { background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 10px 16px; color: var(--text2); font-size: 13px; text-align: center; margin-bottom: 16px; }
 </style>
 </head>
 <body>
@@ -96,8 +110,25 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
     <div class="period" id="periodLabel">Загрузите файл статистики</div>
   </div>
   <div class="upload-area">
-    <button class="upload-btn" onclick="document.getElementById('fileInput').click()">Загрузить Excel</button>
+    <label class="compare-toggle" title="Сравнить два файла">
+      <input type="checkbox" id="compareToggle" />
+      <span class="switch"></span>
+      <span>Сравнение периодов</span>
+    </label>
+    <div id="slotA" class="file-slot hidden">
+      <span class="slot-name">A:</span>
+      <span class="slot-file" id="slotAName">не загружен</span>
+      <button id="slotABtn">Выбрать</button>
+      <input type="file" id="fileInputA" accept=".xlsx,.xls" hidden />
+    </div>
+    <div id="slotB" class="file-slot hidden">
+      <span class="slot-name">B:</span>
+      <span class="slot-file" id="slotBName">не загружен</span>
+      <button id="slotBBtn">Выбрать</button>
+    </div>
+    <button class="upload-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()">Загрузить Excel</button>
     <input type="file" id="fileInput" accept=".xlsx,.xls" />
+    <input type="file" id="fileInputB" accept=".xlsx,.xls" hidden />
   </div>
 </header>
 
@@ -318,41 +349,122 @@ function toast(message, type = 'info', timeout = 5000) {
   }
 })();
 
-document.getElementById('fileInput').addEventListener('change', handleFile);
+document.getElementById('fileInput').addEventListener('change', e => { handleFileTarget(e.target.files[0], 'A'); e.target.value = ''; });
 
-function handleFile(e) {
-  const file = e.target.files[0];
+// ============================================================
+// UI CONTROLS: тумблер сравнения и слоты файлов
+// ============================================================
+const compareToggle = document.getElementById('compareToggle');
+const slotA = document.getElementById('slotA');
+const slotABtn = document.getElementById('slotABtn');
+const slotAName = document.getElementById('slotAName');
+const slotB = document.getElementById('slotB');
+const slotBBtn = document.getElementById('slotBBtn');
+const slotBName = document.getElementById('slotBName');
+const uploadBtn = document.getElementById('uploadBtn');
+const fileInputA = document.getElementById('fileInputA');
+const fileInputB = document.getElementById('fileInputB');
+
+// Универсальный обработчик файла: target = 'A' | 'B'
+function handleFileTarget(file, target) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = function(ev) {
     try {
       if (typeof XLSX === 'undefined' || typeof XLSX.read !== 'function') {
-        toast('Библиотека XLSX не загружена. Откройте страницу через локальный сервер или проверьте подключение к CDN.', 'error');
+        toast('Библиотека XLSX не загружена. Проверьте подключение к CDN.', 'error');
         return;
       }
       const wb = XLSX.read(ev.target.result, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
       const ds = parseData(json, file.name);
-      if (!ds) return;
-      datasetA = ds;
-      // Синхронизировать глобалы для существующего single-режима
-      rawData = ds.rawData;
-      dimensions = ds.dimensions;
-      metrics = ds.metrics;
-      headerRow = ds.headerRow;
-      document.getElementById('periodLabel').textContent = ds.period;
+      if (!ds) { updateSlotStatus(target, 'error'); return; }
+      if (target === 'A') {
+        datasetA = ds;
+        rawData = ds.rawData; dimensions = ds.dimensions; metrics = ds.metrics; headerRow = ds.headerRow;
+      } else {
+        datasetB = ds;
+      }
+      updateSlotStatus(target, 'loaded', file.name);
+      updateModeAndRender();
+    } catch (err) {
+      toast('Ошибка при чтении файла ' + target + ': ' + (err.message || err), 'error');
+      updateSlotStatus(target, 'error');
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function updateSlotStatus(target, status, fileName) {
+  const nameEl = document.getElementById('slot' + target + 'Name');
+  const slot = document.getElementById('slot' + target);
+  if (!nameEl || !slot) return;
+  slot.classList.remove('loaded', 'error');
+  if (status === 'loaded') { slot.classList.add('loaded'); nameEl.textContent = fileName; }
+  else if (status === 'error') { slot.classList.add('error'); nameEl.textContent = '⚠ не распознан'; }
+  else { nameEl.textContent = 'не загружен'; }
+}
+
+function updateModeAndRender() {
+  if (compareToggle.checked && datasetA && datasetB) {
+    mode = 'compare';
+  } else {
+    mode = 'single';
+  }
+  renderForMode();
+}
+
+function renderForMode() {
+  if (!datasetA && !datasetB) {
+    document.getElementById('emptyState').classList.remove('hidden');
+    document.getElementById('dashboardContent').classList.add('hidden');
+    document.getElementById('filtersBar').classList.add('hidden');
+    return;
+  }
+  if (mode === 'single') {
+    if (datasetA) {
+      document.getElementById('periodLabel').textContent = datasetA.period;
       buildUI();
       applyFilters();
       document.getElementById('emptyState').classList.add('hidden');
       document.getElementById('dashboardContent').classList.remove('hidden');
       document.getElementById('filtersBar').classList.remove('hidden');
-    } catch (err) {
-      toast('Ошибка при чтении файла: ' + (err.message || err) + '\n\nПопробуйте открыть страницу через локальный сервер (например: npx serve .)', 'error');
     }
-  };
-  reader.readAsArrayBuffer(file);
+    return;
+  }
+  // compare-режим
+  const content = document.getElementById('dashboardContent');
+  document.getElementById('emptyState').classList.add('hidden');
+  document.getElementById('filtersBar').classList.add('hidden');
+  content.classList.remove('hidden');
+  if (!datasetA || !datasetB) {
+    const missing = !datasetA ? 'A (основной)' : 'B (сравнения)';
+    content.innerHTML = `<div class="compare-hint">Загрузите файл ${missing} для сравнения периодов.</div>`;
+    return;
+  }
+  // Оба файла есть — рендер сравнения (Task 7)
+  renderCompare();
 }
+
+// Тумблер: показать/скрыть слоты A и B, переключить кнопку
+compareToggle.addEventListener('change', () => {
+  if (compareToggle.checked) {
+    slotA.classList.remove('hidden');
+    slotB.classList.remove('hidden');
+    uploadBtn.classList.add('hidden');
+  } else {
+    slotA.classList.add('hidden');
+    slotB.classList.add('hidden');
+    uploadBtn.classList.remove('hidden');
+  }
+  updateModeAndRender();
+});
+
+slotABtn.addEventListener('click', () => fileInputA.click());
+slotBBtn.addEventListener('click', () => fileInputB.click());
+fileInputA.addEventListener('change', e => { handleFileTarget(e.target.files[0], 'A'); e.target.value = ''; });
+fileInputB.addEventListener('change', e => { handleFileTarget(e.target.files[0], 'B'); e.target.value = ''; });
 
 function parseData(rows, fileName) {
   // Find header row
