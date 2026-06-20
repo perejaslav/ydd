@@ -238,11 +238,11 @@ function getMeta(colName) {
   return null;
 }
 
-function formatValue(val, fmt) {
+function formatValue(val, fmtType) {
   if (val === null || val === undefined || val === '' || isNaN(val)) return '—';
   const n = parseFloat(val);
   if (isNaN(n)) return val;
-  switch (fmt) {
+  switch (fmtType) {
     case 'int': return fmt_int(n);
     case 'money': return fmt(n, 2) + ' ₽';
     case 'pct': return fmtPct(n) + '%';
@@ -262,6 +262,10 @@ function safeChart(ctx, config) {
 // FILE HANDLING
 // ============================================================
 // Проверка загрузки зависимостей
+console.log('dashboard.js: загрузка завершена, версия 3');
+console.log('XLSX:', typeof XLSX, typeof XLSX === 'object' ? 'загружен' : 'НЕ ЗАГРУЖЕН');
+console.log('Chart:', typeof Chart, typeof Chart === 'function' ? 'загружен' : 'НЕ ЗАГРУЖЕН');
+
 (function checkDeps() {
   if (typeof XLSX === 'undefined' || typeof XLSX.read !== 'function') {
     document.getElementById('periodLabel').textContent = 'Ошибка: библиотека XLSX не загрузилась. Возможно, заблокирован CDN.';
@@ -274,10 +278,12 @@ function safeChart(ctx, config) {
 })();
 
 document.getElementById('fileInput').addEventListener('change', handleFile);
+console.log('Обработчик файла привязан');
 
 function handleFile(e) {
+  console.log('handleFile вызван', e.target.files.length, 'файл(ов)');
   const file = e.target.files[0];
-  if (!file) return;
+  if (!file) { console.log('Файл не выбран'); return; }
   const reader = new FileReader();
   reader.onload = function(ev) {
     try {
