@@ -73,6 +73,14 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 .empty-state { text-align: center; padding: 80px 20px; color: var(--text2); }
 .empty-state h2 { font-size: 20px; margin-bottom: 8px; color: var(--text); }
 
+#toasts { position: fixed; bottom: 20px; right: 20px; display: flex; flex-direction: column; gap: 10px; z-index: 1000; max-width: 360px; }
+.toast { background: var(--surface2); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 8px; padding: 12px 16px; color: var(--text); font-size: 13px; box-shadow: 0 4px 12px rgba(0,0,0,.4); display: flex; align-items: flex-start; gap: 10px; animation: toastIn .2s ease; }
+.toast.error { border-left-color: var(--red); }
+.toast.success { border-left-color: var(--green); }
+.toast.info { border-left-color: var(--accent); }
+.toast .toast-close { margin-left: auto; cursor: pointer; color: var(--text2); font-size: 16px; line-height: 1; background: none; border: none; }
+@keyframes toastIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
+
 @media (max-width: 900px) {
   .charts-grid { grid-template-columns: 1fr; }
   .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
@@ -94,6 +102,7 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 </header>
 
 <div class="filters-bar hidden" id="filtersBar"></div>
+<div id="toasts"></div>
 
 <main>
   <div id="emptyState" class="empty-state">
@@ -258,6 +267,17 @@ function safeChart(ctx, config) {
   try { return new Chart(ctx, config); } catch (e) { console.error('Chart error:', e); return null; }
 }
 
+function toast(message, type = 'info', timeout = 5000) {
+  const container = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span>${message}</span><button class="toast-close" aria-label="Закрыть">×</button>`;
+  const close = () => { el.remove(); clearTimeout(timer); };
+  el.querySelector('.toast-close').addEventListener('click', close);
+  container.appendChild(el);
+  const timer = setTimeout(close, timeout);
+}
+
 // ============================================================
 // FILE HANDLING
 // ============================================================
@@ -269,7 +289,7 @@ function safeChart(ctx, config) {
     document.querySelector('.upload-btn').style.background = 'var(--red)';
   }
   if (typeof Chart === 'undefined') {
-    console.warn('Chart.js не загрузился — графики не будут работать');
+    toast('Chart.js не загрузился — графики не будут работать.', 'error', 8000);
   }
 })();
 
@@ -282,7 +302,7 @@ function handleFile(e) {
   reader.onload = function(ev) {
     try {
       if (typeof XLSX === 'undefined' || typeof XLSX.read !== 'function') {
-        alert('Библиотека XLSX не загружена. Откройте страницу через локальный сервер или проверьте подключение к CDN.');
+        toast('Библиотека XLSX не загружена. Откройте страницу через локальный сервер или проверьте подключение к CDN.', 'error');
         return;
       }
       const wb = XLSX.read(ev.target.result, { type: 'array' });
@@ -290,7 +310,7 @@ function handleFile(e) {
       const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
       parseData(json);
     } catch (err) {
-      alert('Ошибка при чтении файла: ' + (err.message || err) + '\n\nПопробуйте открыть страницу через локальный сервер (например: npx serve .)');
+      toast('Ошибка при чтении файла: ' + (err.message || err) + '\n\nПопробуйте открыть страницу через локальный сервер (например: npx serve .)', 'error');
     }
   };
   reader.readAsArrayBuffer(file);
@@ -311,7 +331,7 @@ function parseData(rows) {
       }
     }
   }
-  if (headerIdx === -1) { alert('Не удалось найти заголовки в файле. Убедитесь, что файл содержит отчёт Яндекс.Директ.'); return; }
+  if (headerIdx === -1) { toast('Не удалось найти заголовки в файле. Убедитесь, что файл содержит отчёт Яндекс.Директ.', 'error'); return; }
 
   headerRow = rows[headerIdx].map(h => (h || '').toString().trim());
 
@@ -351,8 +371,7 @@ function parseData(rows) {
   document.getElementById('periodLabel').textContent = period || `${rawData.length} строк загружено`;
 
   if (metrics.length === 0) {
-    document.getElementById('periodLabel').textContent = 'Не удалось определить метрики в файле';
-    document.getElementById('emptyState').querySelector('p').textContent = 'Файл загружен, но не содержит распознаваемых столбцов с метриками. Убедитесь, что это выгрузка Яндекс.Директ.';
+    toast('Файл загружен, но не содержит распознаваемых столбцов с метриками. Убедитесь, что это выгрузка Яндекс.Директ.', 'error');
     return;
   }
 
