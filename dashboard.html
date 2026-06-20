@@ -226,6 +226,10 @@ let charts = {};
 let sortCol = null;
 let sortDir = -1;
 let filterSelects = {}; // colName -> HTMLSelectElement
+let mode = 'single';        // 'single' | 'compare'
+let datasetA = null;        // { rawData, dimensions, metrics, headerRow, period, fileName }
+let datasetB = null;
+let compareMetric = null;   // активная метрика для дельты (по умолчанию — расход)
 
 // ============================================================
 // HELPERS
@@ -313,7 +317,20 @@ function handleFile(e) {
       const wb = XLSX.read(ev.target.result, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
-      parseData(json);
+      const ds = parseData(json, file.name);
+      if (!ds) return;
+      datasetA = ds;
+      // Синхронизировать глобалы для существующего single-режима
+      rawData = ds.rawData;
+      dimensions = ds.dimensions;
+      metrics = ds.metrics;
+      headerRow = ds.headerRow;
+      document.getElementById('periodLabel').textContent = ds.period;
+      buildUI();
+      applyFilters();
+      document.getElementById('emptyState').classList.add('hidden');
+      document.getElementById('dashboardContent').classList.remove('hidden');
+      document.getElementById('filtersBar').classList.remove('hidden');
     } catch (err) {
       toast('Ошибка при чтении файла: ' + (err.message || err) + '\n\nПопробуйте открыть страницу через локальный сервер (например: npx serve .)', 'error');
     }
@@ -321,12 +338,11 @@ function handleFile(e) {
   reader.readAsArrayBuffer(file);
 }
 
-function parseData(rows) {
+function parseData(rows, fileName) {
   // Find header row
   let headerIdx = -1;
   for (let i = 0; i < Math.min(15, rows.length); i++) {
     if (!rows[i]) continue;
-    // Look for a row that has at least 3 non-empty cells and contains known headers
     const nonEmpty = rows[i].filter(c => c !== null && c !== undefined && c !== '');
     if (nonEmpty.length >= 3) {
       const rowStr = rows[i].join('|').toLowerCase();
@@ -336,23 +352,19 @@ function parseData(rows) {
       }
     }
   }
-  if (headerIdx === -1) { toast('Не удалось найти заголовки в файле. Убедитесь, что файл содержит отчёт Яндекс.Директ.', 'error'); return; }
+  if (headerIdx === -1) { toast('Не удалось найти заголовки в файле. Убедитесь, что файл содержит отчёт Яндекс.Директ.', 'error'); return null; }
 
-  headerRow = rows[headerIdx].map(h => (h || '').toString().trim());
+  const headerRow = rows[headerIdx].map(h => (h || '').toString().trim());
 
   // Parse data rows
-  rawData = [];
+  const rawData = [];
   for (let i = headerIdx + 1; i < rows.length; i++) {
     const row = rows[i];
     if (!row) continue;
-    // Skip empty rows or summary rows
     const first = (row[0] || '').toString().trim();
     if (!first || first.startsWith('с ') || first.startsWith('Итого') || first.startsWith('Всего')) continue;
     const obj = {};
-    headerRow.forEach((h, idx) => {
-      if (h) obj[h] = row[idx] !== undefined ? row[idx] : null;
-    });
-    // Convert numeric values
+    headerRow.forEach((h, idx) => { if (h) obj[h] = row[idx] !== undefined ? row[idx] : null; });
     headerRow.forEach(h => {
       if (h && obj[h] !== undefined && obj[h] !== null) {
         const v = parseFloat(obj[h]);
@@ -362,8 +374,11 @@ function parseData(rows) {
     rawData.push(obj);
   }
 
-  // Detect dimensions and metrics
-  detectColumns();
+  const dimsAndMetrics = detectColumns(headerRow, rawData);
+  if (dimsAndMetrics.metrics.length === 0) {
+    toast('Файл загружен, но не содержит распознаваемых столбцов с метриками. Убедитесь, что это выгрузка Яндекс.Директ.', 'error');
+    return null;
+  }
 
   // Extract period
   let period = '';
@@ -373,33 +388,28 @@ function parseData(rows) {
       if (s.includes('период') || s.match(/\d{2}\.\d{2}\.\d{4}/)) { period = s; break; }
     }
   }
-  document.getElementById('periodLabel').textContent = period || `${rawData.length} строк загружено`;
 
-  if (metrics.length === 0) {
-    toast('Файл загружен, но не содержит распознаваемых столбцов с метриками. Убедитесь, что это выгрузка Яндекс.Директ.', 'error');
-    return;
-  }
-
-  buildUI();
-  applyFilters();
-  document.getElementById('emptyState').classList.add('hidden');
-  document.getElementById('dashboardContent').classList.remove('hidden');
-  document.getElementById('filtersBar').classList.remove('hidden');
+  return {
+    rawData, headerRow, fileName,
+    dimensions: dimsAndMetrics.dimensions,
+    metrics: dimsAndMetrics.metrics,
+    period: period || `${rawData.length} строк загружено`
+  };
 }
 
 // ============================================================
 // AUTO-DETECT COLUMNS
 // ============================================================
-function detectColumns() {
-  dimensions = [];
-  metrics = [];
+function detectColumns(headerRow, rawData) {
+  const dimensions = [];
+  const metrics = [];
 
   headerRow.forEach(col => {
     if (!col) return;
     const meta = getMeta(col);
 
     if (meta && meta.type === 'dim') {
-      dimensions.push({ name: col, values: getUniqueValues(col), meta });
+      dimensions.push({ name: col, values: getUniqueValues(col, rawData), meta });
     } else if (meta && meta.type === 'metric') {
       metrics.push({ name: col, meta });
     } else {
@@ -412,14 +422,13 @@ function detectColumns() {
 
       if (ratio < 0.3) {
         // Mostly strings -> dimension
-        dimensions.push({ name: col, values: getUniqueValues(col), meta: {} });
+        dimensions.push({ name: col, values: getUniqueValues(col, rawData), meta: {} });
       } else {
         // Mostly numbers -> metric
         const uniqueNums = [...new Set(sampleVals.filter(v => !isNaN(parseFloat(v))).map(v => parseFloat(v)))];
         // Check if it looks like percentages (all values 0-100)
         const looksPct = uniqueNums.length > 1 && uniqueNums.every(v => v >= 0 && v <= 100) && uniqueNums.some(v => v > 0 && v < 1);
-        const fmt = looksPct ? 'pct' : 'int';
-        metrics.push({ name: col, meta: { agg: 'avg', fmt } });
+        metrics.push({ name: col, meta: { agg: 'avg', fmt: looksPct ? 'pct' : 'int' } });
       }
     }
   });
@@ -432,10 +441,12 @@ function detectColumns() {
   if (primaryDim) {
     metrics.forEach(m => m.isPrimaryDim = primaryDim.name);
   }
+
+  return { dimensions, metrics };
 }
 
-function getUniqueValues(col) {
-  const vals = rawData.map(r => r[col]).filter(v => v !== undefined && v !== null && v !== '');
+function getUniqueValues(col, data) {
+  const vals = data.map(r => r[col]).filter(v => v !== undefined && v !== null && v !== '');
   return [...new Set(vals)].sort((a, b) => {
     if (typeof a === 'number' && typeof b === 'number') return a - b;
     return String(a).localeCompare(String(b));
@@ -560,21 +571,22 @@ function applyFilters() {
 // ============================================================
 // AGGREGATION
 // ============================================================
-function aggregateBy(dimCol, data) {
+function aggregateBy(dimCol, data, metricSet) {
+  const ms = metricSet || metrics;
   const map = {};
   data.forEach(r => {
     const k = r[dimCol];
     if (k === undefined || k === null || k === '') return;
     if (!map[k]) {
       map[k] = { _count: 0 };
-      metrics.forEach(m => {
+      ms.forEach(m => {
         if (m.meta.agg === 'sum') map[k][m.name + '_sum'] = 0;
         else { map[k][m.name + '_sum'] = 0; map[k][m.name + '_n'] = 0; }
       });
     }
     const m = map[k];
     m._count++;
-    metrics.forEach(met => {
+    ms.forEach(met => {
       const raw = r[met.name];
       if (met.meta.agg === 'sum') {
         m[met.name + '_sum'] += toNum(raw);
@@ -587,14 +599,15 @@ function aggregateBy(dimCol, data) {
     });
   });
 
+  const impMetric = ms.find(mm => mm.meta && mm.meta.role === 'impressions');
+  const clkMetric = ms.find(mm => mm.meta && mm.meta.role === 'clicks');
+
   return Object.entries(map).map(([k, m]) => {
     const result = { label: k, _count: m._count };
-    metrics.forEach(met => {
+    ms.forEach(met => {
       if (met.meta.agg === 'sum') {
         result[met.name] = m[met.name + '_sum'];
       } else if (met.meta.calc === 'ctr') {
-        const impMetric = metrics.find(mm => mm.meta && mm.meta.role === 'impressions');
-        const clkMetric = metrics.find(mm => mm.meta && mm.meta.role === 'clicks');
         const imp = impMetric ? m[impMetric.name + '_sum'] : (m['Показы_sum'] || 0);
         const clk = clkMetric ? m[clkMetric.name + '_sum'] : (m['Клики_sum'] || 0);
         result[met.name] = imp ? (clk / imp * 100) : 0;
