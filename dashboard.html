@@ -128,6 +128,9 @@ const COL_META = {
   'Тип.criteria':                { type: 'dim' },
   'Критерий':                    { type: 'dim' },
   'Поисковый запрос':            { type: 'dim' },
+  // Мастер отчётов (новый формат, июнь 2026+)
+  'Название кампании':           { type: 'dim', role: 'campaign' },
+  'Логин клиента':               { type: 'dim' },
   'Формат объявления':           { type: 'dim' },
   'Сети':                        { type: 'dim' },
   'Тип сети':                    { type: 'dim' },
@@ -141,6 +144,13 @@ const COL_META = {
   'Внешняя сеть':                { type: 'dim' },
   'Клиент':                      { type: 'dim' },
   'Логин':                       { type: 'dim' },
+  'Расход, ₽':                   { type: 'metric', agg: 'sum', fmt: 'money' },
+  'CPC, ₽':                      { type: 'metric', agg: 'avg', fmt: 'money' },
+  'CTR, %':                      { type: 'metric', agg: 'calc', calc: 'ctr', fmt: 'pct' },
+  'Ср. позиция показа':          { type: 'metric', agg: 'avg', fmt: 'num2' },
+  'Отказы, %':                   { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'CR, %':                       { type: 'metric', agg: 'avg', fmt: 'pct' },
+  'CPA, ₽':                      { type: 'metric', agg: 'avg', fmt: 'money' },
   'Дата':                        { type: 'dim', role: 'date' },
   'Неделя':                      { type: 'dim', role: 'date' },
   'Месяц':                       { type: 'dim', role: 'date' },
@@ -222,7 +232,8 @@ function getMeta(colName) {
   const n = colName.toLowerCase();
   if (n.includes('%') || n.includes('ctr') || n.includes('конверсия') && n.includes('%') || n.includes('отказ') && n.includes('%') || n.includes('roi'))
     return { type: 'metric', agg: 'avg', fmt: 'pct' };
-  if (n.includes('руб') || n.includes('цена') || n.includes('стоимость') || n.includes('расход') || n.includes('cpm') || n.includes('прибыль') || n.includes('выручка'))
+  // ₽ = рубли, cpc/cpa/cpm — деньги
+  if (n.includes('₽') || n.includes('руб') || n.includes('цена') || n.includes('стоимость') || n.includes('расход') || n.includes('cpm') || n.includes('cpc') || n.includes('cpa') || n.includes('прибыль') || n.includes('выручка'))
     return { type: 'metric', agg: 'avg', fmt: 'money' };
   return null;
 }
@@ -243,6 +254,10 @@ function fmt_int(n) { return Math.round(n).toLocaleString('ru-RU'); }
 
 const PALETTE = ['#6366f1','#22c55e','#f59e0b','#ef4444','#06b6d4','#ec4899','#a855f7','#14b8a6','#f97316','#84cc16','#e879f9','#facc15','#38bdf8','#fb923c','#a3e635','#f472b6','#c084fc','#2dd4bf','#fbbf24','#34d399'];
 
+function safeChart(ctx, config) {
+  try { return new Chart(ctx, config); } catch (e) { console.error('Chart error:', e); return null; }
+}
+
 // ============================================================
 // FILE HANDLING
 // ============================================================
@@ -253,10 +268,14 @@ function handleFile(e) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = function(ev) {
-    const wb = XLSX.read(ev.target.result, { type: 'array' });
-    const ws = wb.Sheets[wb.SheetNames[0]];
-    const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
-    parseData(json);
+    try {
+      const wb = XLSX.read(ev.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      parseData(json);
+    } catch (err) {
+      alert('Ошибка при чтении файла: ' + (err.message || err));
+    }
   };
   reader.readAsArrayBuffer(file);
 }
@@ -314,6 +333,12 @@ function parseData(rows) {
     }
   }
   document.getElementById('periodLabel').textContent = period || `${rawData.length} строк загружено`;
+
+  if (metrics.length === 0) {
+    document.getElementById('periodLabel').textContent = 'Не удалось определить метрики в файле';
+    document.getElementById('emptyState').querySelector('p').textContent = 'Файл загружен, но не содержит распознаваемых столбцов с метриками. Убедитесь, что это выгрузка Яндекс.Директ.';
+    return;
+  }
 
   buildUI();
   applyFilters();
@@ -444,6 +469,8 @@ function buildFilters() {
   resetBtn.textContent = 'Сбросить фильтры';
   resetBtn.addEventListener('click', () => {
     Object.values(filterSelects).forEach(s => s.value = '');
+    sortCol = null;
+    sortDir = -1;
     applyFilters();
   });
   bar.appendChild(resetBtn);
@@ -562,7 +589,7 @@ function renderKPIs() {
   });
 
   // Always include impressions, clicks, cost, ctr if available
-  const priority = ['Показы', 'Клики', 'CTR (%)', 'Расход (руб.)', 'Расход, руб.', 'Конверсии', 'Конверсия (%)', 'Конверсия', 'Отказы (%)', 'Процент отказов', 'Ср. позиция показов', 'ROI (%)'];
+  const priority = ['Показы', 'Клики', 'CTR (%)', 'CTR, %', 'Расход, ₽', 'Расход (руб.)', 'Расход, руб.', 'Конверсии', 'Конверсия (%)', 'Конверсия', 'Отказы (%)', 'Отказы, %', 'Процент отказов', 'Ср. позиция показов', 'Ср. позиция показа', 'ROI (%)', 'CPC, ₽', 'CPA, ₽', 'CR, %'];  // old + new formats
   const ordered = [];
   priority.forEach(p => { const m = metrics.find(x => x.name === p); if (m && !ordered.includes(m)) ordered.push(m); });
   kpiMetrics.forEach(m => { if (!ordered.includes(m)) ordered.push(m); });
@@ -642,7 +669,7 @@ function renderCharts() {
       });
     }
     const y1Label = datasets.length > 1 ? (sumMetrics[1] ? sumMetrics[1].name.replace(/\s*\(.*?\)/, '') : 'Клики') : undefined;
-    charts.main = new Chart(canvas, {
+    charts.main = safeChart(canvas, {
       type: 'bar',
       data: { labels, datasets },
       options: chartOpts(sumMetrics[0].name.replace(/\s*\(.*?\)/, ''), y1Label, true)
@@ -650,12 +677,12 @@ function renderCharts() {
   }
 
   // 2. CTR bar chart
-  const ctrMetric = metrics.find(m => m.meta.calc === 'ctr' || m.name === 'CTR (%)');
+  const ctrMetric = metrics.find(m => m.meta.calc === 'ctr' || m.name === 'CTR (%)' || m.name === 'CTR, %');
   if (ctrMetric) {
     const card = makeChartCard('CTR по ' + primaryDim, '%');
     grid.appendChild(card);
     const data = byPrimary.map(r => +(r[ctrMetric.name] || 0).toFixed(2));
-    charts.ctr = new Chart(card.querySelector('canvas'), {
+    charts.ctr = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels, datasets: [{ label: 'CTR %', data, backgroundColor: data.map(v => v >= 5 ? '#22c55e' : v >= 2 ? '#f59e0b' : '#ef4444') }] },
       options: barOpts('CTR %')
@@ -663,12 +690,12 @@ function renderCharts() {
   }
 
   // 3. CPC bar chart
-  const cpcMetric = metrics.find(m => m.name.includes('цена клика'));
+  const cpcMetric = metrics.find(m => m.name.includes('цена клика') || m.name === 'CPC, ₽');
   if (cpcMetric) {
     const sorted = [...byPrimary].sort((a, b) => (b[cpcMetric.name] || 0) - (a[cpcMetric.name] || 0));
     const card = makeChartCard('Средняя цена клика', 'руб.');
     grid.appendChild(card);
-    charts.cpc = new Chart(card.querySelector('canvas'), {
+    charts.cpc = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels: sorted.map(r => r.label), datasets: [{ label: cpcMetric.name, data: sorted.map(r => +(r[cpcMetric.name] || 0).toFixed(2)), backgroundColor: '#f59e0b' }] },
       options: barOpts(cpcMetric.name)
@@ -685,7 +712,7 @@ function renderCharts() {
     grid.appendChild(card);
     const id = 'chart_' + dim.name.replace(/\s+/g, '_');
     card.querySelector('canvas').id = id;
-    charts[id] = new Chart(document.getElementById(id), {
+    charts[id] = safeChart(document.getElementById(id), {
       type: 'doughnut',
       data: { labels: byDim.map(d => d.label), datasets: [{ data: byDim.map(d => +(d[spendMetric.name] || 0).toFixed(2)), backgroundColor: PALETTE }] },
       options: doughnutOpts()
@@ -699,7 +726,7 @@ function renderCharts() {
     const card = makeChartCard(bounceMetric.name + ' по ' + primaryDim, '%');
     grid.appendChild(card);
     const data = sorted.map(r => +(r[bounceMetric.name] || 0).toFixed(2));
-    charts.bounce = new Chart(card.querySelector('canvas'), {
+    charts.bounce = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels: sorted.map(r => r.label), datasets: [{ label: bounceMetric.name, data, backgroundColor: data.map(v => v <= 25 ? '#22c55e' : v <= 40 ? '#f59e0b' : '#ef4444') }] },
       options: barOpts(bounceMetric.name)
@@ -720,7 +747,7 @@ function renderCharts() {
         type: 'line', borderColor: '#ef4444', pointRadius: 4, yAxisID: 'y1', tension: 0.3
       });
     }
-    charts.conv = new Chart(card.querySelector('canvas'), {
+    charts.conv = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels: sorted.map(r => r.label), datasets },
       options: chartOpts('Конверсии', convCostMetric ? convCostMetric.name : undefined)
@@ -738,7 +765,7 @@ function renderCharts() {
         const top15 = byRegion.slice(0, 15);
         const card = makeChartCard('Топ-15 регионов по расходу');
         grid.appendChild(card);
-        charts.regions = new Chart(card.querySelector('canvas'), {
+        charts.regions = safeChart(card.querySelector('canvas'), {
           type: 'bar',
           data: { labels: top15.map(r => r.label.length > 25 ? r.label.slice(0, 25) + '…' : r.label), datasets: [{ label: spendMetric.name, data: top15.map(r => +(r[spendMetric.name] || 0).toFixed(2)), backgroundColor: '#06b6d4' }] },
           options: { ...barOpts(spendMetric.name), indexAxis: 'y' }
@@ -752,7 +779,7 @@ function renderCharts() {
     const spendMetric = metrics.find(m => m.meta.agg === 'sum' && m.meta.fmt === 'money');
     const card = makeChartCard('CTR vs Цена клика', 'пузырьковая', true);
     grid.appendChild(card);
-    charts.bubble = new Chart(card.querySelector('canvas'), {
+    charts.bubble = safeChart(card.querySelector('canvas'), {
       type: 'bubble',
       data: {
         datasets: byPrimary.map((c, i) => ({
@@ -815,6 +842,7 @@ function doughnutOpts() {
 // TABLE
 // ============================================================
 function renderTable() {
+  if (metrics.length === 0) return;
   const primaryDim = metrics[0] ? metrics[0].isPrimaryDim : null;
   if (!primaryDim) return;
 
