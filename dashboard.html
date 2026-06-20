@@ -261,6 +261,18 @@ function safeChart(ctx, config) {
 // ============================================================
 // FILE HANDLING
 // ============================================================
+// Проверка загрузки зависимостей
+(function checkDeps() {
+  if (typeof XLSX === 'undefined' || typeof XLSX.read !== 'function') {
+    document.getElementById('periodLabel').textContent = 'Ошибка: библиотека XLSX не загрузилась. Возможно, заблокирован CDN.';
+    document.querySelector('.upload-btn').textContent = 'CDN заблокирован';
+    document.querySelector('.upload-btn').style.background = 'var(--red)';
+  }
+  if (typeof Chart === 'undefined') {
+    console.warn('Chart.js не загрузился — графики не будут работать');
+  }
+})();
+
 document.getElementById('fileInput').addEventListener('change', handleFile);
 
 function handleFile(e) {
@@ -269,12 +281,16 @@ function handleFile(e) {
   const reader = new FileReader();
   reader.onload = function(ev) {
     try {
+      if (typeof XLSX === 'undefined' || typeof XLSX.read !== 'function') {
+        alert('Библиотека XLSX не загружена. Откройте страницу через локальный сервер или проверьте подключение к CDN.');
+        return;
+      }
       const wb = XLSX.read(ev.target.result, { type: 'array' });
       const ws = wb.Sheets[wb.SheetNames[0]];
       const json = XLSX.utils.sheet_to_json(ws, { header: 1 });
       parseData(json);
     } catch (err) {
-      alert('Ошибка при чтении файла: ' + (err.message || err));
+      alert('Ошибка при чтении файла: ' + (err.message || err) + '\n\nПопробуйте открыть страницу через локальный сервер (например: npx serve .)');
     }
   };
   reader.readAsArrayBuffer(file);
