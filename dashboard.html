@@ -1236,12 +1236,92 @@ function aggregateAll(dataset, overrideData) {
   return result;
 }
 
-// Временные заглушки (заменяются в Tasks 8 и 9)
 function renderDeltaCharts(primaryA, primaryB, compareMetrics) {
   Object.values(charts).forEach(c => { try { c.destroy(); } catch (e) {} });
   charts = {};
   const grid = document.getElementById('chartsGrid');
-  if (grid) grid.innerHTML = '';
+  grid.innerHTML = '';
+
+  const cmp = compareMetrics.find(p => p.a.meta && p.a.meta.role === 'spend') || compareMetrics[0];
+  if (!cmp) return;
+
+  const aggA = aggregateBy(primaryA, datasetA.rawData, datasetA.metrics);
+  const aggB = aggregateBy(primaryB, datasetB.rawData, datasetB.metrics);
+
+  const { matched } = matchByLabel(aggA, aggB);
+
+  const withSum = matched.map(({ a, b }) => ({
+    a, b,
+    sum: (a[cmp.a.name] || 0) + (b[cmp.b.name] || 0)
+  })).sort((x, y) => y.sum - x.sum);
+  const top15 = withSum.slice(0, 15);
+
+  // 1. Grouped bar
+  const card1 = makeChartCard(`${cmp.a.name.replace(/\s*[\(\[,].*$/, '')} — A vs B (топ-15)`, 'сравнение', true);
+  grid.appendChild(card1);
+  charts.grouped = safeChart(card1.querySelector('canvas'), {
+    type: 'bar',
+    data: {
+      labels: top15.map(r => r.a.label),
+      datasets: [
+        { label: 'A', data: top15.map(r => +(r.a[cmp.a.name] || 0).toFixed(2)), backgroundColor: '#6366f199' },
+        { label: 'B', data: top15.map(r => +(r.b[cmp.b.name] || 0).toFixed(2)), backgroundColor: '#22c55e99' }
+      ]
+    },
+    options: chartOpts('A vs B', null, false)
+  });
+
+  // 2. Diverging bar
+  const card2 = makeChartCard(`Дельта % (${cmp.a.name})`, 'ухудшение / улучшение');
+  grid.appendChild(card2);
+  const deltaData = top15.map(r => {
+    const d = deltaRow(r.a[cmp.a.name], r.b[cmp.b.name], cmp.a);
+    return { label: r.a.label, pct: d.pct, isGood: d.isGood };
+  });
+  charts.diverging = safeChart(card2.querySelector('canvas'), {
+    type: 'bar',
+    data: {
+      labels: deltaData.map(r => r.label),
+      datasets: [{
+        label: 'Δ %',
+        data: deltaData.map(r => r.pct === null ? 0 : +r.pct.toFixed(1)),
+        backgroundColor: deltaData.map(r => r.isGood === null ? '#8b8fa8' : (r.isGood ? '#22c55e' : '#ef4444'))
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#8b8fa8', maxRotation: 45 }, grid: { color: '#2e3348' } },
+        y: { title: { display: true, text: 'Δ %', color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { color: '#2e3348' } }
+      }
+    }
+  });
+
+  // 3. Scatter
+  const card3 = makeChartCard(`${cmp.a.name}: A vs B (диагональ = без изменений)`, 'пузырьковая', true);
+  grid.appendChild(card3);
+  const scatterData = matched.map(({ a, b }) => ({
+    x: +(a[cmp.a.name] || 0).toFixed(2),
+    y: +(b[cmp.b.name] || 0).toFixed(2),
+    r: Math.max(5, Math.sqrt(Math.abs(b[cmp.b.name] || 1)) * 0.8),
+    label: a.label
+  }));
+  charts.scatter = safeChart(card3.querySelector('canvas'), {
+    type: 'bubble',
+    data: { datasets: [{ label: 'кампании', data: scatterData, backgroundColor: '#6366f166', borderColor: '#6366f1' }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { labels: { color: '#e4e6f0', font: { size: 11 } } },
+        tooltip: { callbacks: { label: ctx => ctx.raw.label + ': A=' + ctx.raw.x + ', B=' + ctx.raw.y } }
+      },
+      scales: {
+        x: { title: { display: true, text: 'A', color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { color: '#2e3348' } },
+        y: { title: { display: true, text: 'B', color: '#8b8fa8' }, ticks: { color: '#8b8fa8' }, grid: { color: '#2e3348' } }
+      }
+    }
+  });
 }
 function renderDeltaTable(primaryA, primaryB, compareMetrics) {
   const head = document.getElementById('tableHead');
