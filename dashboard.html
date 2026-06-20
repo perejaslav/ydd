@@ -261,6 +261,8 @@ let mode = 'single';        // 'single' | 'compare'
 let datasetA = null;        // { rawData, dimensions, metrics, headerRow, period, fileName }
 let datasetB = null;
 let compareMetric = null;   // активная метрика для дельты (по умолчанию — расход)
+let compareDataA = null;    // отфильтрованные данные A для compare-режима
+let compareDataB = null;
 // Направление метрики: 'up' = рост хорошо, 'down' = падение хорошо
 const METRIC_DIRECTION = {
   impressions: 'up', clicks: 'up', conversions: 'up', ctr: 'up', cr: 'up',
@@ -444,6 +446,7 @@ function renderForMode() {
     return;
   }
   // Оба файла есть — рендер сравнения (Task 7)
+  buildCompareFilters();
   renderCompare();
 }
 
@@ -651,6 +654,48 @@ function buildFilters() {
     sortCol = null;
     sortDir = -1;
     applyFilters();
+  });
+  bar.appendChild(resetBtn);
+}
+
+// Фильтры для compare-режима: один селект по primaryDim с объединёнными значениями
+function buildCompareFilters() {
+  const bar = document.getElementById('filtersBar');
+  bar.innerHTML = '';
+  filterSelects = {};
+
+  const primaryA = datasetA.metrics[0] && datasetA.metrics[0].isPrimaryDim;
+  const primaryB = datasetB.metrics[0] && datasetB.metrics[0].isPrimaryDim;
+  if (!primaryA || !primaryB) return;
+
+  const dimsA = datasetA.dimensions.find(d => d.name === primaryA);
+  const dimsB = datasetB.dimensions.find(d => d.name === primaryB);
+  if (!dimsA && !dimsB) return;
+
+  const allVals = [...new Set([
+    ...(dimsA ? dimsA.values : []),
+    ...(dimsB ? dimsB.values : [])
+  ])].sort((a, b) => String(a).localeCompare(String(b)));
+  if (allVals.length <= 1) return;
+
+  const group = document.createElement('div');
+  group.className = 'filter-group';
+  const label = document.createElement('label');
+  label.textContent = primaryA;
+  const sel = document.createElement('select');
+  sel.innerHTML = '<option value="">Все</option>' + allVals.map(v => `<option value="${v}">${v}</option>`).join('');
+  sel.addEventListener('change', renderCompare);
+  group.appendChild(label);
+  group.appendChild(sel);
+  bar.appendChild(group);
+  filterSelects['__compare_label__'] = sel;
+
+  const resetBtn = document.createElement('button');
+  resetBtn.className = 'reset-btn';
+  resetBtn.textContent = 'Сбросить';
+  resetBtn.addEventListener('click', () => {
+    Object.values(filterSelects).forEach(s => s.value = '');
+    renderCompare();
   });
   bar.appendChild(resetBtn);
 }
@@ -1160,9 +1205,29 @@ function renderCompare() {
     </div></div>`;
   content.appendChild(tableSection);
 
+  // Применить фильтр (если выбран) и сохранить данные для рендер-функций
+  getCompareData();
+
   renderDeltaKPIs(compareMetrics);
   renderDeltaCharts(primaryA, primaryB, compareMetrics);
   renderDeltaTable(primaryA, primaryB, compareMetrics);
+}
+
+// Применяет фильтр из filterSelects['__compare_label__'] к обоим датасетам,
+// результат сохраняет в compareDataA/B и возвращает их.
+function getCompareData() {
+  const primaryA = datasetA.metrics[0] && datasetA.metrics[0].isPrimaryDim;
+  const primaryB = datasetB.metrics[0] && datasetB.metrics[0].isPrimaryDim;
+  const sel = filterSelects['__compare_label__'];
+  const filterVal = sel ? sel.value : '';
+  if (filterVal) {
+    compareDataA = datasetA.rawData.filter(r => String(r[primaryA]) === filterVal);
+    compareDataB = datasetB.rawData.filter(r => String(r[primaryB]) === filterVal);
+  } else {
+    compareDataA = datasetA.rawData;
+    compareDataB = datasetB.rawData;
+  }
+  return { compareDataA, compareDataB, primaryA, primaryB };
 }
 
 // Сопоставляет метрики двух датасетов по role, затем по имени
@@ -1186,8 +1251,8 @@ function renderDeltaKPIs(compareMetrics) {
   const grid = document.getElementById('kpiGrid');
   grid.innerHTML = '';
 
-  const aggA = aggregateAll(datasetA);
-  const aggB = aggregateAll(datasetB);
+  const aggA = aggregateAll(datasetA, compareDataA);
+  const aggB = aggregateAll(datasetB, compareDataB);
 
   const clsColors = ['accent', 'cyan', 'green', 'pink', 'orange', 'red', 'green', 'orange', 'red'];
 
@@ -1246,8 +1311,8 @@ function renderDeltaCharts(primaryA, primaryB, compareMetrics) {
   const cmp = compareMetrics.find(p => p.a.meta && p.a.meta.role === 'spend') || compareMetrics[0];
   if (!cmp) return;
 
-  const aggA = aggregateBy(primaryA, datasetA.rawData, datasetA.metrics);
-  const aggB = aggregateBy(primaryB, datasetB.rawData, datasetB.metrics);
+  const aggA = aggregateBy(primaryA, compareDataA, datasetA.metrics);
+  const aggB = aggregateBy(primaryB, compareDataB, datasetB.metrics);
 
   const { matched } = matchByLabel(aggA, aggB);
 
@@ -1328,8 +1393,8 @@ function renderDeltaTable(primaryA, primaryB, compareMetrics) {
   const head = document.getElementById('tableHead');
   const body = document.getElementById('tableBody');
 
-  const aggA = aggregateBy(primaryA, datasetA.rawData, datasetA.metrics);
-  const aggB = aggregateBy(primaryB, datasetB.rawData, datasetB.metrics);
+  const aggA = aggregateBy(primaryA, compareDataA, datasetA.metrics);
+  const aggB = aggregateBy(primaryB, compareDataB, datasetB.metrics);
   const { matched, onlyA, onlyB } = matchByLabel(aggA, aggB);
 
   const cols = compareMetrics.slice(0, 3);
