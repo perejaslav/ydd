@@ -1116,6 +1116,139 @@ function sortTable(col) {
   else { sortCol = col; sortDir = -1; }
   renderTable();
 }
+
+// ============================================================
+// RENDER COMPARE
+// ============================================================
+function renderCompare() {
+  if (!datasetA || !datasetB) return;
+
+  const primaryA = datasetA.metrics[0] && datasetA.metrics[0].isPrimaryDim;
+  const primaryB = datasetB.metrics[0] && datasetB.metrics[0].isPrimaryDim;
+  if (!primaryA || !primaryB) {
+    toast('Не удалось определить основное измерение в одном из файлов.', 'error');
+    return;
+  }
+
+  const content = document.getElementById('dashboardContent');
+  content.innerHTML = '';
+
+  document.getElementById('periodLabel').textContent = datasetA.period + ' → ' + datasetB.period;
+
+  const compareMetrics = buildCompareMetrics(datasetA.metrics, datasetB.metrics);
+  if (compareMetrics.length === 0) {
+    content.innerHTML = '<div class="compare-hint">Нет общих метрик между файлами A и B для сравнения.</div>';
+    return;
+  }
+
+  const kpiGrid = document.createElement('div');
+  kpiGrid.className = 'kpi-grid';
+  kpiGrid.id = 'kpiGrid';
+  content.appendChild(kpiGrid);
+
+  const chartsGrid = document.createElement('div');
+  chartsGrid.className = 'charts-grid';
+  chartsGrid.id = 'chartsGrid';
+  content.appendChild(chartsGrid);
+
+  const tableSection = document.createElement('div');
+  tableSection.innerHTML = `
+    <div class="section-title">Сравнение по «${primaryA}»</div>
+    <div class="table-card"><div class="table-scroll">
+      <table id="dataTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>
+    </div></div>`;
+  content.appendChild(tableSection);
+
+  renderDeltaKPIs(compareMetrics);
+  renderDeltaCharts(primaryA, primaryB, compareMetrics);
+  renderDeltaTable(primaryA, primaryB, compareMetrics);
+}
+
+// Сопоставляет метрики двух датасетов по role, затем по имени
+function buildCompareMetrics(metricsA, metricsB) {
+  const result = [];
+  const priority = ['spend', 'impressions', 'clicks', 'ctr', 'conversions', 'cpc', 'cpa', 'cr', 'bounce'];
+  priority.forEach(role => {
+    const a = metricsA.find(m => m.meta && m.meta.role === role);
+    const b = metricsB.find(m => m.meta && m.meta.role === role);
+    if (a && b) result.push({ a, b });
+  });
+  metricsA.forEach(a => {
+    if (result.some(p => p.a === a)) return;
+    const b = metricsB.find(m => m.name === a.name);
+    if (b && !result.some(p => p.b === b)) result.push({ a, b });
+  });
+  return result;
+}
+
+function renderDeltaKPIs(compareMetrics) {
+  const grid = document.getElementById('kpiGrid');
+  grid.innerHTML = '';
+
+  const aggA = aggregateAll(datasetA);
+  const aggB = aggregateAll(datasetB);
+
+  const clsColors = ['accent', 'cyan', 'green', 'pink', 'orange', 'red', 'green', 'orange', 'red'];
+
+  compareMetrics.slice(0, 12).forEach((pair, i) => {
+    const { a, b } = pair;
+    const valA = aggA[a.name];
+    const valB = aggB[b.name];
+    const d = deltaRow(valA, valB, a);
+
+    const card = document.createElement('div');
+    card.className = `kpi-card ${clsColors[i % clsColors.length]}`;
+    const label = a.name.replace(/\s*[\(\[,].*$/, '').replace(/\s+₽?$/, '');
+    const arrow = d.pct === null ? '' : (d.isGood === null ? '→' : (d.pct > 0 ? '▲' : '▼'));
+    const pctStr = d.pct === null ? '—' : (d.pct > 0 ? '+' : '') + d.pct.toFixed(1) + '%';
+    const colorClass = d.isGood === null ? '' : (d.isGood ? 'status-good' : 'status-bad');
+    const aStr = formatValue(valA, a.meta.fmt);
+    const bStr = formatValue(valB, b.meta.fmt);
+    card.innerHTML = `
+      <div class="kpi-label">${label}</div>
+      <div class="kpi-value">${bStr}</div>
+      <div class="kpi-sub ${colorClass}">${arrow} ${pctStr} &nbsp;<span style="color:var(--text2)">${aStr} → ${bStr}</span></div>`;
+    grid.appendChild(card);
+  });
+}
+
+// Итог по всем строкам датасета для каждой метрики
+function aggregateAll(dataset, overrideData) {
+  const rows = overrideData || dataset.rawData;
+  const result = {};
+  dataset.metrics.forEach(met => {
+    if (met.meta.agg === 'sum') {
+      result[met.name] = rows.reduce((s, r) => s + toNum(r[met.name]), 0);
+    } else if (met.meta.calc === 'ctr') {
+      const impM = dataset.metrics.find(mm => mm.meta && mm.meta.role === 'impressions');
+      const clkM = dataset.metrics.find(mm => mm.meta && mm.meta.role === 'clicks');
+      const impName = impM ? impM.name : 'Показы';
+      const clkName = clkM ? clkM.name : 'Клики';
+      const imp = rows.reduce((s, r) => s + toNum(r[impName]), 0);
+      const clk = rows.reduce((s, r) => s + toNum(r[clkName]), 0);
+      result[met.name] = imp ? clk / imp * 100 : 0;
+    } else {
+      let sum = 0, n = 0;
+      rows.forEach(r => { if (hasValue(r[met.name])) { sum += parseFloat(r[met.name]); n++; } });
+      result[met.name] = n ? sum / n : null;
+    }
+  });
+  return result;
+}
+
+// Временные заглушки (заменяются в Tasks 8 и 9)
+function renderDeltaCharts(primaryA, primaryB, compareMetrics) {
+  Object.values(charts).forEach(c => { try { c.destroy(); } catch (e) {} });
+  charts = {};
+  const grid = document.getElementById('chartsGrid');
+  if (grid) grid.innerHTML = '';
+}
+function renderDeltaTable(primaryA, primaryB, compareMetrics) {
+  const head = document.getElementById('tableHead');
+  const body = document.getElementById('tableBody');
+  if (head) head.innerHTML = '';
+  if (body) body.innerHTML = '';
+}
 </script>
 </body>
 </html>
