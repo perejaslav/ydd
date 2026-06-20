@@ -784,7 +784,7 @@ function renderCharts() {
       data: {
         datasets: byPrimary.map((c, i) => ({
           label: c.label,
-          data: [{ x: +(c[ctrMetric.name] || 0).toFixed(2), y: +(c[cpcMetric.name] || 0).toFixed(2), r: Math.max(5, Math.sqrt(c[spendMetric ? spendMetric.name] || 1) * 0.8) }],
+          data: [{ x: +(c[ctrMetric.name] || 0).toFixed(2), y: +(c[cpcMetric.name] || 0).toFixed(2), r: Math.max(5, Math.sqrt(spendMetric ? (c[spendMetric.name] || 1) : 1) * 0.8) }],
           backgroundColor: PALETTE[i % PALETTE.length] + '99',
           borderColor: PALETTE[i % PALETTE.length]
         }))
