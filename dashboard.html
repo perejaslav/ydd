@@ -100,6 +100,14 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
 .file-slot button { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; }
 .file-slot button:hover { text-decoration: underline; }
 .compare-hint { background: var(--surface); border: 1px dashed var(--border); border-radius: 8px; padding: 10px 16px; color: var(--text2); font-size: 13px; text-align: center; margin-bottom: 16px; }
+/* Drill-down styles */
+.drill-link { cursor: pointer; text-decoration: none; color: var(--accent2); }
+.drill-link:hover { text-decoration: underline; }
+.drill-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.drill-back-btn { background: var(--surface2); border: 1px solid var(--border); color: var(--text); cursor: pointer; padding: 6px 10px; border-radius: 4px; font-size: 13px; }
+.drill-back-btn:hover { background: var(--surface); border-color: var(--accent); }
+.drill-title { font-size: 16px; font-weight: 600; color: var(--text); margin: 0; }
+.drill-period { color: var(--text2); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -141,6 +149,7 @@ main { padding: 20px 24px; max-width: 1600px; margin: 0 auto; }
     <p>Нажмите кнопку «Загрузить Excel» и выберите файл .xlsx</p>
   </div>
   <div id="dashboardContent" class="hidden"></div>
+  <div id="drillDownContent" class="hidden"></div>
 </main>
 
 <script>
@@ -260,9 +269,10 @@ let filterSelects = {}; // colName -> HTMLSelectElement
 let mode = 'single';        // 'single' | 'compare'
 let datasetA = null;        // { rawData, dimensions, metrics, headerRow, period, fileName }
 let datasetB = null;
-let compareMetric = null;   // активная метрика для дельты (по умолчанию — расход)
 let compareDataA = null;    // отфильтрованные данные A для compare-режима
 let compareDataB = null;
+let drillDownSnapshot = null;  // для drill-down по кампании
+let drillCharts = {};          // отдельное хранилище chart-объектов для drill-down
 // Направление метрики: 'up' = рост хорошо, 'down' = падение хорошо
 const METRIC_DIRECTION = {
   impressions: 'up', clicks: 'up', conversions: 'up', ctr: 'up', cr: 'up',
@@ -335,6 +345,237 @@ function toast(message, type = 'info', timeout = 5000) {
   container.appendChild(el);
   const timer = setTimeout(close, timeout);
 }
+
+// Экспорт таблицы в CSV
+function exportTableToCsv() {
+  if (metrics.length === 0 || !primaryDim) {
+    toast('Нет данных для экспорта', 'warn');
+    return;
+  }
+  const primaryDim = metrics[0] ? metrics[0].isPrimaryDim : null;
+  const byPrimary = aggregateBy(primaryDim, filteredData);
+  const cols = [primaryDim, ...metrics.map(m => m.name)];
+  
+  // Формируем строки CSV
+  const rows = [cols.join(';')];
+  byPrimary.forEach(row => {
+    const cells = cols.map(col => {
+      let val = col === primaryDim ? row.label : row[col];
+      // Экранируем кавычки и разделители
+      if (typeof val === 'string' && (val.includes(';') || val.includes('"'))) {
+        val = `"${val.replace(/"/g, '""')}"`;
+      }
+      return val ?? '—';
+    });
+    rows.push(cells.join(';'));
+  });
+  
+  const csvContent = rows.join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `yandex-direct-report-${new Date().toISOString().slice(0, 10)}.csv`);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  toast('Экспорт завершён!', 'success');
+}
+
+// ============================================================
+// DRILL-DOWN (детали кампании)
+// ============================================================
+function pickDrillDim(currentPrimaryDim) {
+  // Приоритет измерений для разбивки
+  const priorityRoles = ['region', 'device', 'date', 'gender', 'age'];
+  // Исключаем id и текущий primaryDim
+  const candidates = dimensions.filter(dim => {
+    if (dim.meta && dim.meta.role === 'id') return false;
+    if (dim.name === currentPrimaryDim) return false;
+    if (dim.values.length <= 1) return false; // нет смысла в единственном значении
+    return true;
+  });
+  if (candidates.length === 0) return null;
+  // Сначала по приоритету ролей
+  for (const role of priorityRoles) {
+    const found = candidates.find(dim => dim.meta && dim.meta.role === role);
+    if (found) return found;
+  }
+  // Иначе первое подходящее
+  return candidates[0];
+}
+
+function enterDrillDown(campaignLabel) {
+  if (mode !== 'single') return; // drill-down только в single-режиме
+  const primaryDim = metrics[0] ? metrics[0].isPrimaryDim : null;
+  if (!primaryDim) return;
+
+  // 1. Сохранить снимок состояния
+  drillDownSnapshot = {
+    rawData: [...rawData],
+    filteredData: [...filteredData],
+    // Глубокая копия dimensions и metrics, потому что будем менять isPrimaryDim
+    dimensions: JSON.parse(JSON.stringify(dimensions)),
+    metrics: JSON.parse(JSON.stringify(metrics)),
+    sortCol, sortDir, primaryDim
+  };
+
+  // 2. Фильтровать строки выбранной кампании
+  const campRows = rawData.filter(r => r[primaryDim] === campaignLabel);
+  if (campRows.length === 0) {
+    toast('Нет данных для выбранной кампании', 'warn');
+    drillDownSnapshot = null;
+    return;
+  }
+
+  // 3. Выбрать измерение для разбивки
+  const drillDim = pickDrillDim(primaryDim);
+  if (!drillDim) {
+    toast('Нет доступных измерений для детализации кампании', 'warn');
+    drillDownSnapshot = null;
+    return;
+  }
+
+  // 4. Подменить глобальные данные
+  rawData = [...campRows];
+  filteredData = [...campRows];
+  sortCol = null; sortDir = -1;
+
+  // 5. Клонировать и модифицировать dimensions/metrics: перенести isPrimaryDim на drillDim
+  // Глубокая копия (чтобы не трогать snapshot)
+  const newDims = JSON.parse(JSON.stringify(dimensions));
+  const newMets = JSON.parse(JSON.stringify(metrics));
+
+  // Убрать isPrimaryDim со всех метрик
+  newMets.forEach(m => { m.isPrimaryDim = undefined; });
+  // Поставить на выбранное измерение
+  const drillDimIndex = newDims.findIndex(d => d.name === drillDim.name);
+  if (drillDimIndex >= 0) {
+    // Вставить флаг isPrimaryDim в первую метрику (как это делает detectColumns)
+    if (newMets.length > 0) {
+      newMets[0].isPrimaryDim = drillDim.name;
+    }
+  }
+
+  dimensions = newDims;
+  metrics = newMets;
+
+  // 6. Рендерить UI drill-down
+  renderDrillUI(campaignLabel, drillDim);
+}
+
+function exitDrillDown() {
+  if (!drillDownSnapshot) return;
+  // Очистить drill-charts
+  Object.values(drillCharts).forEach(c => { try { c.destroy(); } catch {} });
+  for (const key in drillCharts) { delete drillCharts[key]; }
+  // Восстановить состояние
+  rawData = drillDownSnapshot.rawData;
+  filteredData = drillDownSnapshot.filteredData;
+  dimensions = drillDownSnapshot.dimensions;
+  metrics = drillDownSnapshot.metrics;
+  sortCol = drillDownSnapshot.sortCol;
+  sortDir = drillDownSnapshot.sortDir;
+  drillDownSnapshot = null;
+
+  // Скрыть drill-down UI, показать основной
+  document.getElementById('drillDownContent').classList.add('hidden');
+  document.getElementById('dashboardContent').classList.remove('hidden');
+  document.getElementById('filtersBar').classList.remove('hidden');
+
+  // Восстановить рендер
+  applyFilters();
+}
+
+function renderDrillUI(campaignLabel, drillDim) {
+  // Скрыть основной дашборд и фильтры
+  document.getElementById('dashboardContent').classList.add('hidden');
+  document.getElementById('filtersBar').classList.add('hidden');
+  const drillEl = document.getElementById('drillDownContent');
+  drillEl.classList.remove('hidden');
+
+  // Шапка: кнопка Назад, название кампании, период, селект измерения разбивки
+  drillEl.innerHTML = `
+    <div class="drill-header">
+      <button class="drill-back-btn" onclick="exitDrillDown()">← Назад</button>
+      <div>
+        <div class="drill-title">Кампания: ${campaignLabel}</div>
+        <div class="drill-period">${datasetA && datasetA.period ? datasetA.period : ''}</div>
+      </div>
+      <div class="filter-group" style="margin-left: auto;">
+        <label>Разбить по</label>
+        <select id="drillDimSelect"></select>
+      </div>
+    </div>
+    <div id="drillKpiGrid" class="kpi-grid"></div>
+    <div id="drillChartsGrid" class="charts-grid"></div>
+    <div>
+      <div class="section-title">
+        Детальная таблица
+        <button id="exportCsvBtn" style="margin-left: 16px; padding: 4px 8px; font-size: 12px; cursor: pointer;">Экспорт CSV</button>
+      </div>
+      <div class="table-card">
+        <div class="table-scroll">
+          <table id="dataTable"><thead><tr id="tableHead"></tr></thead><tbody id="tableBody"></tbody></table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Заполнить селект измерений разбивки (все доступные, кроме id и текущего primaryDim)
+  const select = document.getElementById('drillDimSelect');
+  const currentPrimary = metrics[0] ? metrics[0].isPrimaryDim : null;
+  const options = dimensions.filter(dim => {
+    if (dim.meta && dim.meta.role === 'id') return false;
+    if (dim.values.length <= 1) return false;
+    return true;
+  }).map(dim => {
+    return `<option value="${dim.name}" ${dim.name === currentPrimary ? 'selected' : ''}>${dim.name}</option>`;
+  });
+  select.innerHTML = options.join('');
+  select.addEventListener('change', () => {
+    // Смена измерения разбивки: обновить isPrimaryDim и перерендерить
+    const newDimName = select.value;
+    // Перенести isPrimaryDim
+    metrics.forEach(m => { m.isPrimaryDim = undefined; });
+    if (metrics.length > 0) {
+      metrics[0].isPrimaryDim = newDimName;
+    }
+    sortCol = null; sortDir = -1;
+    // Перерендерить все — но используем временные id, чтобы не конфликтовать с основным renderAll
+    renderDrillAll();
+  });
+
+  // Первый рендер
+  renderDrillAll();
+}
+
+function renderDrillAll() {
+  // Переиспользуем параметризованные функции рендера напрямую
+  const kpiGrid = document.getElementById('drillKpiGrid');
+  const chartsGrid = document.getElementById('drillChartsGrid');
+  const tableHead = document.getElementById('drillTableHead');
+  const tableBody = document.getElementById('drillTableBody');
+
+  renderKPIs(kpiGrid);
+  renderCharts(chartsGrid, drillCharts);
+  renderTable(tableHead, tableBody);
+}
+
+// Esc-обработчик для выхода из drill-down
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drillDownSnapshot !== null) {
+    exitDrillDown();
+  }
+});
+
+// Слушатель для кнопки экспорта CSV
+document.addEventListener('click', (e) => {
+  if (e.target.id === 'exportCsvBtn') {
+    exportTableToCsv();
+  }
+});
 
 // ============================================================
 // FILE HANDLING
@@ -446,6 +687,7 @@ function renderForMode() {
     return;
   }
   // Оба файла есть — рендер сравнения (Task 7)
+  document.getElementById('filtersBar').classList.remove('hidden');
   buildCompareFilters();
   renderCompare();
 }
@@ -695,6 +937,8 @@ function buildCompareFilters() {
   resetBtn.textContent = 'Сбросить';
   resetBtn.addEventListener('click', () => {
     Object.values(filterSelects).forEach(s => s.value = '');
+    sortCol = null;
+    sortDir = -1;
     renderCompare();
   });
   bar.appendChild(resetBtn);
@@ -833,9 +1077,9 @@ function renderAll() {
   renderTable();
 }
 
-function renderKPIs() {
-  const grid = document.getElementById('kpiGrid');
-  grid.innerHTML = '';
+function renderKPIs(gridElement = document.getElementById('kpiGrid')) {
+  if (!gridElement) return;
+  gridElement.innerHTML = '';
 
   // Pick key metrics for KPI cards (sum-type first, then ctr, then avg)
   const kpiMetrics = metrics.filter(m => {
@@ -877,22 +1121,22 @@ function renderKPIs() {
     const card = document.createElement('div');
     card.className = `kpi-card ${clsColors[i % clsColors.length]}`;
     card.innerHTML = `<div class="kpi-label">${m.name.replace(/\s*\(.*?\)\s*/, '')}</div><div class="kpi-value">${value}</div>`;
-    grid.appendChild(card);
+    gridElement.appendChild(card);
   });
 
   // Total rows KPI
   const card = document.createElement('div');
   card.className = 'kpi-card accent';
   card.innerHTML = `<div class="kpi-label">Строк данных</div><div class="kpi-value">${fmt(filteredData.length)}</div>`;
-  grid.appendChild(card);
+  gridElement.appendChild(card);
 }
 
-function renderCharts() {
-  Object.values(charts).forEach(c => c.destroy());
-  charts = {};
+function renderCharts(gridElement = document.getElementById('chartsGrid'), chartStore = charts) {
+  if (!gridElement) return;
+  Object.values(chartStore).forEach(c => { try { c.destroy(); } catch {} });
+  for (const key in chartStore) { delete chartStore[key]; }
 
-  const grid = document.getElementById('chartsGrid');
-  grid.innerHTML = '';
+  gridElement.innerHTML = '';
 
   const primaryDim = metrics[0] ? metrics[0].isPrimaryDim : null;
   if (!primaryDim) return;
@@ -909,7 +1153,7 @@ function renderCharts() {
   const sumMetrics = metrics.filter(m => m.meta.agg === 'sum' && m.meta.fmt !== 'int').slice(0, 2);
   if (sumMetrics.length >= 1) {
     const card = makeChartCard(`${sumMetrics.map(m => m.name.replace(/\s*\(.*?\)/, '')).join(' и ')} по ${primaryDim}`, 'сравнение', true);
-    grid.appendChild(card);
+    gridElement.appendChild(card);
     const canvas = card.querySelector('canvas');
     const datasets = [];
     sumMetrics.forEach((m, i) => {
@@ -932,7 +1176,7 @@ function renderCharts() {
       });
     }
     const y1Label = datasets.length > 1 ? (sumMetrics[1] ? sumMetrics[1].name.replace(/\s*\(.*?\)/, '') : 'Клики') : undefined;
-    charts.main = safeChart(canvas, {
+    chartStore.main = safeChart(canvas, {
       type: 'bar',
       data: { labels, datasets },
       options: chartOpts(sumMetrics[0].name.replace(/\s*\(.*?\)/, ''), y1Label, true)
@@ -943,9 +1187,9 @@ function renderCharts() {
   const ctrMetric = metrics.find(m => m.meta.calc === 'ctr' || m.name === 'CTR (%)' || m.name === 'CTR, %');
   if (ctrMetric) {
     const card = makeChartCard('CTR по ' + primaryDim, '%');
-    grid.appendChild(card);
+    gridElement.appendChild(card);
     const data = byPrimary.map(r => +(r[ctrMetric.name] || 0).toFixed(2));
-    charts.ctr = safeChart(card.querySelector('canvas'), {
+    chartStore.ctr = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels, datasets: [{ label: 'CTR %', data, backgroundColor: data.map(v => v >= 5 ? '#22c55e' : v >= 2 ? '#f59e0b' : '#ef4444') }] },
       options: barOpts('CTR %')
@@ -957,8 +1201,8 @@ function renderCharts() {
   if (cpcMetric) {
     const sorted = [...byPrimary].sort((a, b) => (b[cpcMetric.name] || 0) - (a[cpcMetric.name] || 0));
     const card = makeChartCard('Средняя цена клика', 'руб.');
-    grid.appendChild(card);
-    charts.cpc = safeChart(card.querySelector('canvas'), {
+    gridElement.appendChild(card);
+    chartStore.cpc = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels: sorted.map(r => r.label), datasets: [{ label: cpcMetric.name, data: sorted.map(r => +(r[cpcMetric.name] || 0).toFixed(2)), backgroundColor: '#f59e0b' }] },
       options: barOpts(cpcMetric.name)
@@ -972,10 +1216,10 @@ function renderCharts() {
     if (!spendMetric || byDim.length < 2) return;
 
     const card = makeChartCard(spendMetric.name.replace(/\s*\(.*?\)/, '') + ' по ' + dim.name);
-    grid.appendChild(card);
+    gridElement.appendChild(card);
     const id = 'chart_' + dim.name.replace(/\s+/g, '_');
     card.querySelector('canvas').id = id;
-    charts[id] = safeChart(document.getElementById(id), {
+    chartStore[id] = safeChart(document.getElementById(id), {
       type: 'doughnut',
       data: { labels: byDim.map(d => d.label), datasets: [{ data: byDim.map(d => +(d[spendMetric.name] || 0).toFixed(2)), backgroundColor: PALETTE }] },
       options: doughnutOpts()
@@ -987,9 +1231,9 @@ function renderCharts() {
   if (bounceMetric) {
     const sorted = [...byPrimary].sort((a, b) => (b[bounceMetric.name] || 0) - (a[bounceMetric.name] || 0));
     const card = makeChartCard(bounceMetric.name + ' по ' + primaryDim, '%');
-    grid.appendChild(card);
+    gridElement.appendChild(card);
     const data = sorted.map(r => +(r[bounceMetric.name] || 0).toFixed(2));
-    charts.bounce = safeChart(card.querySelector('canvas'), {
+    chartStore.bounce = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels: sorted.map(r => r.label), datasets: [{ label: bounceMetric.name, data, backgroundColor: data.map(v => v <= 25 ? '#22c55e' : v <= 40 ? '#f59e0b' : '#ef4444') }] },
       options: barOpts(bounceMetric.name)
@@ -1002,7 +1246,7 @@ function renderCharts() {
   if (convMetric) {
     const sorted = [...byPrimary].sort((a, b) => (b[convMetric.name] || 0) - (a[convMetric.name] || 0));
     const card = makeChartCard('Конверсии по ' + primaryDim);
-    grid.appendChild(card);
+    gridElement.appendChild(card);
     const datasets = [{ label: 'Конверсии', data: sorted.map(r => r[convMetric.name] || 0), backgroundColor: '#22c55e', yAxisID: 'y' }];
     if (convCostMetric) {
       datasets.push({
@@ -1010,7 +1254,7 @@ function renderCharts() {
         type: 'line', borderColor: '#ef4444', pointRadius: 4, yAxisID: 'y1', tension: 0.3
       });
     }
-    charts.conv = safeChart(card.querySelector('canvas'), {
+    chartStore.conv = safeChart(card.querySelector('canvas'), {
       type: 'bar',
       data: { labels: sorted.map(r => r.label), datasets },
       options: chartOpts('Конверсии', convCostMetric ? convCostMetric.name : undefined)
@@ -1027,8 +1271,8 @@ function renderCharts() {
         byRegion.sort((a, b) => (b[spendMetric.name] || 0) - (a[spendMetric.name] || 0));
         const top15 = byRegion.slice(0, 15);
         const card = makeChartCard('Топ-15 регионов по расходу');
-        grid.appendChild(card);
-        charts.regions = safeChart(card.querySelector('canvas'), {
+        gridElement.appendChild(card);
+        chartStore.regions = safeChart(card.querySelector('canvas'), {
           type: 'bar',
           data: { labels: top15.map(r => r.label.length > 25 ? r.label.slice(0, 25) + '…' : r.label), datasets: [{ label: spendMetric.name, data: top15.map(r => +(r[spendMetric.name] || 0).toFixed(2)), backgroundColor: '#06b6d4' }] },
           options: { ...barOpts(spendMetric.name), indexAxis: 'y' }
@@ -1041,8 +1285,8 @@ function renderCharts() {
   if (ctrMetric && cpcMetric) {
     const spendMetric = metrics.find(m => m.meta.agg === 'sum' && m.meta.fmt === 'money');
     const card = makeChartCard('CTR vs Цена клика', 'пузырьковая', true);
-    grid.appendChild(card);
-    charts.bubble = safeChart(card.querySelector('canvas'), {
+    gridElement.appendChild(card);
+    chartStore.bubble = safeChart(card.querySelector('canvas'), {
       type: 'bubble',
       data: {
         datasets: byPrimary.map((c, i) => ({
@@ -1104,19 +1348,21 @@ function doughnutOpts() {
 // ============================================================
 // TABLE
 // ============================================================
-function renderTable() {
+function renderTable(headElement = document.getElementById('tableHead'), bodyElement = document.getElementById('tableBody')) {
   if (metrics.length === 0) return;
   const primaryDim = metrics[0] ? metrics[0].isPrimaryDim : null;
   if (!primaryDim) return;
+  if (!headElement || !bodyElement) return;
 
   const byPrimary = aggregateBy(primaryDim, filteredData);
 
   // Sort
   if (sortCol === null) {
     const spendMetric = metrics.find(m => m.meta.agg === 'sum' && m.meta.fmt === 'money');
-    sortCol = spendMetric ? spendMetric.name : metrics[0].name;
+    sortCol = spendMetric ? spendMetric.name : (metrics.length > 0 && metrics[0] && metrics[0].name ? metrics[0].name : primaryDim);
     sortDir = -1;
   }
+  if (!sortCol) return; // защита при отсутствии валидной колонки для сортировки
   byPrimary.sort((a, b) => {
     const av = typeof a[sortCol] === 'number' ? a[sortCol] : (a.label || '');
     const bv = typeof b[sortCol] === 'number' ? b[sortCol] : (b.label || '');
@@ -1125,9 +1371,8 @@ function renderTable() {
   });
 
   // Build header
-  const head = document.getElementById('tableHead');
   const cols = [primaryDim, ...metrics.map(m => m.name)];
-  head.innerHTML = cols.map(col => {
+  headElement.innerHTML = cols.map(col => {
     const isLabel = col === primaryDim;
     const align = isLabel ? 'left' : 'right';
     const arrow = sortCol === col ? (sortDir === 1 ? ' ▲' : ' ▼') : '';
@@ -1135,10 +1380,17 @@ function renderTable() {
   }).join('');
 
   // Build body
-  const body = document.getElementById('tableBody');
-  body.innerHTML = byPrimary.map(r => {
+  bodyElement.innerHTML = byPrimary.map(r => {
     const cells = cols.map(col => {
-      if (col === primaryDim) return `<td>${r.label}</td>`;
+      if (col === primaryDim) {
+        const escapedLabel = String(r.label).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+        // Кликабельно только в single-режиме и не в drill-down (чтобы не было вложенного drill-down)
+        if (mode === 'single' && !drillDownSnapshot) {
+          return `<td><span class="drill-link" onclick="enterDrillDown('${escapedLabel}')">${r.label}</span></td>`;
+        } else {
+          return `<td>${r.label}</td>`;
+        }
+      }
       const meta = metrics.find(m => m.name === col);
       const fmt = meta ? meta.meta.fmt : 'num2';
       const val = r[col];
@@ -1146,7 +1398,7 @@ function renderTable() {
       // Color coding for key metrics
       if (fmt === 'pct') {
         if (val !== null && val !== undefined) {
-          if (col.toLowerCase().includes('ctr')) cls += val >= 5 ? ' status-good' : val >= 2 ? ' status-warn' : ' status-bad';
+          if (col.toLowerCase().includes('ctr')) cls += val >= 5 ? ' status-good' : val >= 2 ? ' status-warn' : 'status-bad';
           else if (col.toLowerCase().includes('отказ')) cls += val <= 25 ? ' status-good' : val <= 40 ? ' status-warn' : ' status-bad';
         }
       }
